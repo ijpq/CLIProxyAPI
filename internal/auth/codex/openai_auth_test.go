@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"golang.org/x/net/proxy"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -46,35 +47,27 @@ func TestRefreshTokensWithRetry_NonRetryableOnlyAttemptsOnce(t *testing.T) {
 }
 
 func TestNewCodexAuthWithProxyURL_OverrideDirectDisablesProxy(t *testing.T) {
-	cfg := &config.Config{SDKConfig: config.SDKConfig{ProxyURL: "http://proxy.example.com:8080"}}
+	cfg := &config.Config{SDKConfig: config.SDKConfig{ProxyURL: "socks5://proxy.example.com:1080"}}
 	auth := NewCodexAuthWithProxyURL(cfg, "direct")
 
-	transport, ok := auth.httpClient.Transport.(*http.Transport)
-	if !ok || transport == nil {
-		t.Fatalf("expected http.Transport, got %T", auth.httpClient.Transport)
+	rt, ok := auth.httpClient.Transport.(*utlsRoundTripper)
+	if !ok || rt == nil {
+		t.Fatalf("expected *utlsRoundTripper, got %T", auth.httpClient.Transport)
 	}
-	if transport.Proxy != nil {
-		t.Fatal("expected direct transport to disable proxy function")
+	if rt.dialer != proxy.Direct {
+		t.Fatalf("expected direct dialer, got %T", rt.dialer)
 	}
 }
 
 func TestNewCodexAuthWithProxyURL_OverrideProxyTakesPrecedence(t *testing.T) {
-	cfg := &config.Config{SDKConfig: config.SDKConfig{ProxyURL: "http://global.example.com:8080"}}
-	auth := NewCodexAuthWithProxyURL(cfg, "http://override.example.com:8081")
+	cfg := &config.Config{SDKConfig: config.SDKConfig{ProxyURL: "socks5://global.example.com:1080"}}
+	auth := NewCodexAuthWithProxyURL(cfg, "socks5://override.example.com:1081")
 
-	transport, ok := auth.httpClient.Transport.(*http.Transport)
-	if !ok || transport == nil {
-		t.Fatalf("expected http.Transport, got %T", auth.httpClient.Transport)
+	rt, ok := auth.httpClient.Transport.(*utlsRoundTripper)
+	if !ok || rt == nil {
+		t.Fatalf("expected *utlsRoundTripper, got %T", auth.httpClient.Transport)
 	}
-	req, errReq := http.NewRequest(http.MethodGet, "https://example.com", nil)
-	if errReq != nil {
-		t.Fatalf("new request: %v", errReq)
-	}
-	proxyURL, errProxy := transport.Proxy(req)
-	if errProxy != nil {
-		t.Fatalf("proxy func: %v", errProxy)
-	}
-	if proxyURL == nil || proxyURL.String() != "http://override.example.com:8081" {
-		t.Fatalf("proxy URL = %v, want http://override.example.com:8081", proxyURL)
+	if rt.dialer == nil || rt.dialer == proxy.Direct {
+		t.Fatalf("expected override proxy dialer, got %#v", rt.dialer)
 	}
 }

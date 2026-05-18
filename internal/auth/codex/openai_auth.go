@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -53,7 +52,7 @@ func NewCodexAuthWithProxyURL(cfg *config.Config, proxyURL string) *CodexAuth {
 	}
 	sdkCfg.ProxyURL = effectiveProxyURL
 	return &CodexAuth{
-		httpClient: util.SetProxy(&sdkCfg, &http.Client{}),
+		httpClient: NewOpenAIHttpClient(&sdkCfg),
 	}
 }
 
