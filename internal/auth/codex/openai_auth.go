@@ -17,7 +17,6 @@ import (
 	"github.com/MoeForge/moego/json"
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/singleflight"
 )
@@ -67,7 +66,7 @@ func NewCodexAuthWithProxyURL(cfg *config.Config, proxyURL string) *CodexAuth {
 		journal = &FileRefreshJournal{Dir: cfg.AuthDir}
 	}
 	return &CodexAuth{
-		httpClient:        util.SetProxy(&sdkCfg, &http.Client{}),
+		httpClient:        NewOpenAIHttpClient(&sdkCfg),
 		siwcAgentNameHint: agentNameHint,
 		refreshJournal:    journal,
 	}
