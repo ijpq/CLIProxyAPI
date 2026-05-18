@@ -645,7 +645,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 }
 
 func (e *CodexWebsocketsExecutor) dialCodexWebsocket(ctx context.Context, auth *cliproxyauth.Auth, wsURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
-	dialer := newProxyAwareWebsocketDialer(e.cfg, auth)
+	dialer := newProxyAwareWebsocketDialer(e.cfg, auth, wsURL)
 	dialer.HandshakeTimeout = codexResponsesWebsocketHandshakeTO
 	dialer.EnableCompression = true
 	if ctx == nil {
@@ -721,7 +721,28 @@ func readCodexWebsocketMessage(ctx context.Context, sess *codexWebsocketSession,
 	}
 }
 
-func newProxyAwareWebsocketDialer(cfg *config.Config, auth *cliproxyauth.Auth) *websocket.Dialer {
+// utlsWebsocketHosts lists wss:// hostnames that should be tunneled with a
+// utls Chrome TLS handshake to bypass Cloudflare bot detection.
+var utlsWebsocketHosts = map[string]struct{}{
+	"chatgpt.com": {},
+}
+
+func utlsWebsocketHost(wsURL string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(wsURL))
+	if err != nil {
+		return "", false
+	}
+	if !strings.EqualFold(parsed.Scheme, "wss") {
+		return "", false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if _, ok := utlsWebsocketHosts[host]; ok {
+		return host, true
+	}
+	return "", false
+}
+
+func newProxyAwareWebsocketDialer(cfg *config.Config, auth *cliproxyauth.Auth, wsURL string) *websocket.Dialer {
 	dialer := &websocket.Dialer{
 		Proxy:             http.ProxyFromEnvironment,
 		HandshakeTimeout:  codexResponsesWebsocketHandshakeTO,
@@ -739,6 +760,16 @@ func newProxyAwareWebsocketDialer(cfg *config.Config, auth *cliproxyauth.Auth) *
 	if proxyURL == "" && cfg != nil {
 		proxyURL = strings.TrimSpace(cfg.ProxyURL)
 	}
+
+	// For wss:// to Cloudflare-fronted OpenAI hosts, use a utls Chrome
+	// TLS handshake to bypass bot detection. NetDialTLSContext takes over
+	// both dialing and TLS, so it must honor proxy settings itself.
+	if host, useUtls := utlsWebsocketHost(wsURL); useUtls {
+		dialer.NetDialTLSContext = helps.UtlsWebsocketTLSDial(host, proxyURL)
+		dialer.Proxy = nil
+		return dialer
+	}
+
 	if proxyURL == "" {
 		return dialer
 	}
