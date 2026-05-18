@@ -134,6 +134,8 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 var utlsProtectedHosts = map[string]struct{}{
 	"api.anthropic.com": {},
 	"chatgpt.com":       {},
+	"auth.openai.com":   {},
+	"api.openai.com":    {},
 }
 
 // fallbackRoundTripper uses utls for protected HTTPS hosts and falls back to
