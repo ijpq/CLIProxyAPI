@@ -128,13 +128,17 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return resp, nil
 }
 
-// anthropicHosts contains the hosts that should use utls Chrome TLS fingerprint.
-var anthropicHosts = map[string]struct{}{
+// utlsHosts contains the hosts that should use utls Chrome TLS fingerprint
+// to bypass Cloudflare's TLS fingerprinting.
+var utlsHosts = map[string]struct{}{
 	"api.anthropic.com": {},
+	"chatgpt.com":       {},
+	"auth.openai.com":   {},
+	"api.openai.com":    {},
 }
 
-// fallbackRoundTripper uses utls for Anthropic HTTPS hosts and falls back to
-// standard transport for all other requests (non-HTTPS or non-Anthropic hosts).
+// fallbackRoundTripper uses utls for allow-listed HTTPS hosts and falls back
+// to the standard transport for all other requests.
 type fallbackRoundTripper struct {
 	utls     *utlsRoundTripper
 	fallback http.RoundTripper
@@ -142,7 +146,7 @@ type fallbackRoundTripper struct {
 
 func (f *fallbackRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme == "https" {
-		if _, ok := anthropicHosts[strings.ToLower(req.URL.Hostname())]; ok {
+		if _, ok := utlsHosts[strings.ToLower(req.URL.Hostname())]; ok {
 			return f.utls.RoundTrip(req)
 		}
 	}
