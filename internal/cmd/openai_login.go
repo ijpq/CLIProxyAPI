@@ -55,7 +55,7 @@ func DoCodexLogin(cfg *config.Config, options *LoginOptions) {
 	_, savedPath, err := manager.Login(context.Background(), "codex", cfg, authOpts)
 	if err != nil {
 		if authErr, ok := errors.AsType[*codex.AuthenticationError](err); ok {
-			log.Error(codex.GetUserFriendlyMessage(authErr))
+			log.WithField("detail", authErr.Error()).Error(codex.GetUserFriendlyMessage(authErr))
 			if authErr.Type == codex.ErrPortInUse.Type {
 				os.Exit(codex.ErrPortInUse.Code)
 			}
