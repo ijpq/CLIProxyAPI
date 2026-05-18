@@ -157,6 +157,14 @@ func newClaudeCodeTLSConfig(host string, sessionCache tls.ClientSessionCache) *t
 	}
 }
 
+// utlsProtectedHosts contains the hosts that should use utls Chrome TLS fingerprint
+// to bypass Cloudflare's TLS fingerprinting.
+var utlsProtectedHosts = map[string]struct{}{
+	"chatgpt.com":       {},
+	"auth.openai.com":   {},
+	"api.openai.com":    {},
+}
+
 // claudeCodeTLSClientHelloSpec reproduces the deterministic Node/OpenSSL
 // ClientHello emitted by Claude Code 2.1.220 on macOS arm64. Keep this spec in
 // sync with a fresh native capture whenever the advertised Claude Code version
@@ -356,8 +364,10 @@ func (f *fallbackRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	if IsAnthropicUpstreamURL(req.URL) {
 		return f.anthropic.RoundTrip(req)
 	}
-	if req.URL.Scheme == "https" && strings.EqualFold(req.URL.Hostname(), "chatgpt.com") {
-		return f.chrome.RoundTrip(req)
+	if req.URL.Scheme == "https" {
+		if _, ok := utlsProtectedHosts[strings.ToLower(req.URL.Hostname())]; ok {
+			return f.chrome.RoundTrip(req)
+		}
 	}
 	return f.fallback.RoundTrip(req)
 }
