@@ -23,7 +23,7 @@ func TestRequestProxyOverridesCredentialProxyForWebsocketAndAntigravity(t *testi
 		t.Fatalf("antigravity proxy = %q, want %q", got, requestProxy)
 	}
 
-	dialer := newProxyAwareWebsocketDialer(ctx, cfg, auth)
+	dialer := newProxyAwareWebsocketDialer(ctx, cfg, auth, "wss://upstream.example/v1")
 	if dialer.Proxy == nil {
 		t.Fatal("websocket proxy function is nil")
 	}

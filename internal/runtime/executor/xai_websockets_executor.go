@@ -1154,7 +1154,7 @@ func (e *XAIWebsocketsExecutor) prepareResponsesWebsocketRequest(ctx context.Con
 }
 
 func (e *XAIWebsocketsExecutor) dialXAIWebsocket(ctx context.Context, auth *cliproxyauth.Auth, wsURL string, headers http.Header) (*websocket.Conn, *websocketConnectionCloser, *http.Response, error) {
-	dialer := newProxyAwareWebsocketDialer(ctx, e.cfg, auth)
+	dialer := newProxyAwareWebsocketDialer(ctx, e.cfg, auth, wsURL)
 	dialer.HandshakeTimeout = codexResponsesWebsocketHandshakeTO
 	dialer.EnableCompression = true
 	if ctx == nil {
