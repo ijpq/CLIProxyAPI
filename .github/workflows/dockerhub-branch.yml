@@ -1,1 +1,52 @@
-bmFtZTogZG9ja2VyaHViLWJyYW5jaAoKb246CiAgcHVzaDoKICAgIGJyYW5jaGVzOgogICAgICAtIG1haW4KICAgICAgLSBkZXYKICAgICAgLSBjbGF1ZGVfdXBkYXRlCiAgd29ya2Zsb3dfZGlzcGF0Y2g6CgplbnY6CiAgRE9DS0VSSFVCX1JFUE86ICR7eyBzZWNyZXRzLkRPQ0tFUkhVQl9VU0VSTkFNRSB9fS9jbGktcHJveHktYXBpCgpqb2JzOgogIGJ1aWxkLWFuZC1wdXNoOgogICAgcnVucy1vbjogdWJ1bnR1LWxhdGVzdAogICAgc3RlcHM6CiAgICAgIC0gbmFtZTogQ2hlY2tvdXQKICAgICAgICB1c2VzOiBhY3Rpb25zL2NoZWNrb3V0QHY0CgogICAgICAtIG5hbWU6IFNldCB1cCBRRU1VCiAgICAgICAgdXNlczogZG9ja2VyL3NldHVwLXFlbXUtYWN0aW9uQHYzCgogICAgICAtIG5hbWU6IFNldCB1cCBEb2NrZXIgQnVpbGR4CiAgICAgICAgdXNlczogZG9ja2VyL3NldHVwLWJ1aWxkeC1hY3Rpb25AdjMKCiAgICAgIC0gbmFtZTogTG9naW4gdG8gRG9ja2VyIEh1YgogICAgICAgIHVzZXM6IGRvY2tlci9sb2dpbi1hY3Rpb25AdjMKICAgICAgICB3aXRoOgogICAgICAgICAgdXNlcm5hbWU6ICR7eyBzZWNyZXRzLkRPQ0tFUkhVQl9VU0VSTkFNRSB9fQogICAgICAgICAgcGFzc3dvcmQ6ICR7eyBzZWNyZXRzLkRPQ0tFUkhVQl9UT0tFTiB9fQoKICAgICAgLSBuYW1lOiBHZW5lcmF0ZSBidWlsZCBtZXRhZGF0YQogICAgICAgIHJ1bjogfAogICAgICAgICAgQlJBTkNIX1NMVUc9IiQoZWNobyAiJHtHSVRIVUJfUkVGX05BTUV9IiB8IHRyICcvJyAnLScgfCB0ciAnWzp1cHBlcjpdJyAnWzpsb3dlcjpdJykiCiAgICAgICAgICBlY2hvICJCUkFOQ0hfU0xVRz0ke0JSQU5DSF9TTFVHfSIgPj4gJEdJVEhVQl9FTlYKICAgICAgICAgIGVjaG8gIkNPTU1JVD0kKGdpdCByZXYtcGFyc2UgLS1zaG9ydCBIRUFEKSIgPj4gJEdJVEhVQl9FTlYKICAgICAgICAgIGVjaG8gIkJVSUxEX0RBVEU9JChkYXRlIC11ICslWS0lbS0lZFQlSDolTTolU1opIiA+PiAkR0lUSFVCX0VOVgoKICAgICAgLSBuYW1lOiBCdWlsZCBhbmQgcHVzaCAobXVsdGktYXJjaCkKICAgICAgICB1c2VzOiBkb2NrZXIvYnVpbGQtcHVzaC1hY3Rpb25AdjYKICAgICAgICB3aXRoOgogICAgICAgICAgY29udGV4dDogLgogICAgICAgICAgcGxhdGZvcm1zOiBsaW51eC9hbWQ2NCxsaW51eC9hcm02NAogICAgICAgICAgcHVzaDogdHJ1ZQogICAgICAgICAgYnVpbGQtYXJnczogfAogICAgICAgICAgICBWRVJTSU9OPSR7eyBlbnYuQlJBTkNIX1NMVUcgfX0KICAgICAgICAgICAgQ09NTUlUPSR7eyBlbnYuQ09NTUlUIH19CiAgICAgICAgICAgIEJVSUxEX0RBVEU9JHt7IGVudi5CVUlMRF9EQVRFIH19CiAgICAgICAgICB0YWdzOiB8CiAgICAgICAgICAgICR7eyBlbnYuRE9DS0VSSFVCX1JFUE8gfX06JHt7IGVudi5CUkFOQ0hfU0xVRyB9fQogICAgICAgICAgICAke3sgZW52LkRPQ0tFUkhVQl9SRVBPIH19OiR7eyBlbnYuQlJBTkNIX1NMVUcgfX0tJHt7IGVudi5DT01NSVQgfX0K
+name: dockerhub-branch
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - claude_update
+  workflow_dispatch:
+
+env:
+  DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/cli-proxy-api
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate build metadata
+        run: |
+          BRANCH_SLUG="$(echo "${GITHUB_REF_NAME}" | tr '/' '-' | tr '[:upper:]' '[:lower:]')"
+          echo "BRANCH_SLUG=${BRANCH_SLUG}" >> $GITHUB_ENV
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_ENV
+
+      - name: Build and push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ env.BRANCH_SLUG }}
+            COMMIT=${{ env.COMMIT }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
+          tags: |
+            ${{ env.DOCKERHUB_REPO }}:${{ env.BRANCH_SLUG }}
+            ${{ env.DOCKERHUB_REPO }}:${{ env.BRANCH_SLUG }}-${{ env.COMMIT }}
