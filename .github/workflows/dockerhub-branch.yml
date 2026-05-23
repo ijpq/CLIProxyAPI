@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - dev
-      - claude/kind-carson-jhKd9
+      - claude_update
   workflow_dispatch:
 
 env:
