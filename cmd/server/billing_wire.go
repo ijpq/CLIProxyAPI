@@ -68,7 +68,21 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 	} else {
 		log.Warn("BILLING_PRICING_FILE not set; usage will be recorded with zero cost")
 	}
-	usage.RegisterPlugin(billing.NewMeterPlugin(pg, pricing))
+	balanceThreshold, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_BALANCE_THRESHOLD")), 64)
+	balanceCacheTTL := parseDurationDefault(os.Getenv("BILLING_BALANCE_CACHE_TTL"), 10*time.Second)
+	balanceGuard := billing.NewBalanceGuard(pg, balanceThreshold, balanceCacheTTL)
+
+	rate, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_RATE_PER_SEC")), 64)
+	burst, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_RATE_BURST")), 64)
+	rateLimiter := billing.NewRateLimiter(rate, burst)
+
+	api.RegisterPostAuthHandler(rateLimiter.Handler())
+	api.RegisterPostAuthHandler(balanceGuard.Handler())
+	go sweepRateLimiter(rateLimiter)
+
+	meter := billing.NewMeterPlugin(pg, pricing)
+	meter.SetInvalidator(balanceGuard.Invalidate)
+	usage.RegisterPlugin(meter)
 
 	if adminEmail := strings.TrimSpace(os.Getenv("BILLING_ADMIN_EMAIL")); adminEmail != "" {
 		promoteCtx, cancelPromote := context.WithTimeout(ctx, 10*time.Second)
@@ -91,6 +105,7 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 		log.Infof("billing: %d top-up method(s) loaded", len(topupCfg.Methods()))
 	}
 	module := portal.New(pg, tokens, topupCfg)
+	module.SetWalletChangeHook(balanceGuard.Invalidate)
 
 	configurator := func(engine *gin.Engine, _ *sdkhandlers.BaseAPIHandler, _ *config.Config) {
 		group := engine.Group("/portal")
@@ -98,4 +113,28 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 		log.Info("billing portal routes mounted at /portal")
 	}
 	return []api.ServerOption{api.WithRouterConfigurator(configurator)}
+}
+
+// parseDurationDefault parses a duration string and returns def on empty or
+// invalid input.
+func parseDurationDefault(raw string, def time.Duration) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return def
+	}
+	return d
+}
+
+// sweepRateLimiter drops idle per-user buckets every minute so the limiter
+// map does not grow unbounded over the lifetime of the process.
+func sweepRateLimiter(l *billing.RateLimiter) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		l.SweepStale(15 * time.Minute)
+	}
 }

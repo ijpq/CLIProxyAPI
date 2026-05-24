@@ -538,6 +538,9 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 			if c.IsAborted() {
 				return
 			}
+			if runPostAuthHandlers(c) {
+				return
+			}
 			c.Next()
 			return
 		}

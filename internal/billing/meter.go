@@ -20,14 +20,24 @@ type MeterSink interface {
 // event: it looks up pricing, computes cost, and writes the usage row plus a
 // wallet debit transactionally.
 type MeterPlugin struct {
-	sink    MeterSink
-	pricing *PricingTable
+	sink        MeterSink
+	pricing     *PricingTable
+	invalidator func(userID string)
 }
 
 // NewMeterPlugin builds the plugin. Both arguments are required; passing nil
 // for either disables billing for the request.
 func NewMeterPlugin(sink MeterSink, pricing *PricingTable) *MeterPlugin {
 	return &MeterPlugin{sink: sink, pricing: pricing}
+}
+
+// SetInvalidator registers a callback invoked after each successful debit so
+// downstream caches (e.g. the BalanceGuard) can drop stale entries.
+func (p *MeterPlugin) SetInvalidator(fn func(userID string)) {
+	if p == nil {
+		return
+	}
+	p.invalidator = fn
 }
 
 // HandleUsage implements usage.Plugin.
@@ -79,6 +89,10 @@ func (p *MeterPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 		ErrorMessage:     errMsg,
 	}); err != nil {
 		log.WithError(err).Errorf("billing: record usage for user %s failed", userID)
+		return
+	}
+	if p.invalidator != nil {
+		p.invalidator(userID)
 	}
 }
 

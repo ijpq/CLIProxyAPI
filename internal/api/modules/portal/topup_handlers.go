@@ -176,6 +176,9 @@ func (m *Module) handleAdminConfirmTopupOrder(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "confirm failed"})
 		return
 	}
+	if m.onWalletChanged != nil {
+		m.onWalletChanged(order.UserID)
+	}
 	c.JSON(http.StatusOK, topupView(order))
 }
 
