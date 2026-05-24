@@ -2182,11 +2182,18 @@ func resolveHost(base string) string {
 }
 
 func resolveUserAgent(auth *cliproxyauth.Auth) string {
-	return misc.AntigravityRequestUserAgent(antigravityConfiguredUserAgent(auth))
+	return misc.AntigravityRequestUserAgentForAuth(authIDOrEmpty(auth), antigravityConfiguredUserAgent(auth))
 }
 
 func resolveLoadCodeAssistUserAgent(auth *cliproxyauth.Auth) string {
-	return misc.AntigravityLoadCodeAssistUserAgent(antigravityConfiguredUserAgent(auth))
+	return misc.AntigravityLoadCodeAssistUserAgentForAuth(authIDOrEmpty(auth), antigravityConfiguredUserAgent(auth))
+}
+
+func authIDOrEmpty(auth *cliproxyauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	return auth.ID
 }
 
 func antigravityConfiguredUserAgent(auth *cliproxyauth.Auth) string {
