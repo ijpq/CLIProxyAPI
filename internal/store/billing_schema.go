@@ -15,6 +15,7 @@ const (
 	BillingWalletsTable      = "wallets"
 	BillingTransactionsTable = "transactions"
 	BillingUsageRecordsTable = "usage_records"
+	BillingTopupOrdersTable  = "topup_orders"
 )
 
 // EnsureBillingSchema creates the tables required for the paid-tier features:
@@ -124,5 +125,27 @@ func billingSchemaStatements(s *PostgresStore) []string {
 		`, usageRecords, users, apiKeys),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_usage_user_created ON %s(user_id, created_at DESC)`, usageRecords),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_usage_key_created ON %s(api_key_id, created_at DESC)`, usageRecords),
+
+		fmt.Sprintf(`
+			CREATE TABLE IF NOT EXISTS %s (
+				id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+				user_id         UUID NOT NULL REFERENCES %s(id) ON DELETE CASCADE,
+				method          TEXT NOT NULL DEFAULT 'usdt',
+				amount          NUMERIC(20,6) NOT NULL,
+				currency        TEXT NOT NULL DEFAULT 'USDT',
+				network         TEXT NOT NULL DEFAULT '',
+				wallet_address  TEXT NOT NULL DEFAULT '',
+				tx_hash         TEXT NOT NULL DEFAULT '',
+				status          TEXT NOT NULL DEFAULT 'pending',
+				notes           TEXT NOT NULL DEFAULT '',
+				created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				submitted_at    TIMESTAMPTZ,
+				confirmed_at    TIMESTAMPTZ,
+				expires_at      TIMESTAMPTZ
+			)
+		`, s.fullTableName(BillingTopupOrdersTable), users),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_topup_user_created ON %s(user_id, created_at DESC)`, s.fullTableName(BillingTopupOrdersTable)),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_topup_status ON %s(status)`, s.fullTableName(BillingTopupOrdersTable)),
+		fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_tx_hash ON %s(tx_hash) WHERE tx_hash <> ''`, s.fullTableName(BillingTopupOrdersTable)),
 	}
 }
