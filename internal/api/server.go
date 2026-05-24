@@ -1546,6 +1546,9 @@ func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
 				}
 				c.Request = c.Request.WithContext(ctx)
 			}
+			if runPostAuthHandlers(c) {
+				return
+			}
 			c.Next()
 			return
 		}
