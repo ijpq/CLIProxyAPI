@@ -277,6 +277,47 @@ func (s *PostgresStore) ConfirmTopupOrder(ctx context.Context, orderID, adminNot
 	return o, nil
 }
 
+// ListSubmittedTopupOrders returns top-up orders awaiting on-chain confirmation
+// for the given method/network. Results are oldest-first so a polling worker
+// processes them in submission order.
+func (s *PostgresStore) ListSubmittedTopupOrders(ctx context.Context, method, network string, limit int) ([]TopupOrder, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("postgres store: not initialized")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	query := fmt.Sprintf(`
+		SELECT id, user_id, method, amount::text, currency, network, wallet_address,
+		       tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at
+		FROM %s
+		WHERE status = 'submitted' AND method = $1 AND network = $2 AND tx_hash <> ''
+		ORDER BY submitted_at ASC NULLS LAST, created_at ASC
+		LIMIT $3
+	`, s.fullTableName(BillingTopupOrdersTable))
+
+	rows, err := s.db.QueryContext(ctx, query, method, network, limit)
+	if err != nil {
+		return nil, fmt.Errorf("postgres store: list submitted topup orders: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]TopupOrder, 0, limit)
+	for rows.Next() {
+		var o TopupOrder
+		if err := rows.Scan(
+			&o.ID, &o.UserID, &o.Method, &o.Amount, &o.Currency, &o.Network, &o.WalletAddress,
+			&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt,
+		); err != nil {
+			return nil, fmt.Errorf("postgres store: scan submitted topup: %w", err)
+		}
+		out = append(out, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres store: iterate submitted topups: %w", err)
+	}
+	return out, nil
+}
+
 // CancelTopupOrder marks a non-confirmed order as cancelled.
 func (s *PostgresStore) CancelTopupOrder(ctx context.Context, userID, orderID string) error {
 	if s == nil || s.db == nil {
