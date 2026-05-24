@@ -28,6 +28,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/modules"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v7/internal/api/modules/amp"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/home"
@@ -1534,6 +1535,16 @@ func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
 				if len(result.Metadata) > 0 {
 					c.Set("accessMetadata", result.Metadata)
 				}
+				ctx := c.Request.Context()
+				if userID := result.Metadata[billing.MetadataKeyUserID]; userID != "" {
+					c.Set(billing.MetadataKeyUserID, userID)
+					ctx = billing.WithUserID(ctx, userID)
+				}
+				if keyID := result.Metadata[billing.MetadataKeyAPIKeyID]; keyID != "" {
+					c.Set(billing.MetadataKeyAPIKeyID, keyID)
+					ctx = billing.WithAPIKeyID(ctx, keyID)
+				}
+				c.Request = c.Request.WithContext(ctx)
 			}
 			c.Next()
 			return
