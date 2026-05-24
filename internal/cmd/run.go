@@ -25,8 +25,8 @@ import (
 //   - cfg: The application configuration
 //   - configPath: The path to the configuration file
 //   - localPassword: Optional password accepted for local management requests
-func StartService(cfg *config.Config, configPath string, localPassword string) error {
-	return StartServiceWithPluginHost(cfg, configPath, localPassword, nil)
+func StartService(cfg *config.Config, configPath string, localPassword string, extraServerOpts ...api.ServerOption) error {
+	return StartServiceWithPluginHost(cfg, configPath, localPassword, nil, extraServerOpts...)
 }
 
 // StartServiceWithPluginHost builds and runs the proxy service with a shared plugin host.
@@ -72,8 +72,8 @@ func StartServiceWithPluginHost(cfg *config.Config, configPath string, localPass
 
 // StartServiceBackground starts the proxy service in a background goroutine
 // and returns a cancel function for shutdown and a done channel.
-func StartServiceBackground(cfg *config.Config, configPath string, localPassword string) (cancel func(), done <-chan struct{}) {
-	return StartServiceBackgroundWithPluginHost(cfg, configPath, localPassword, nil)
+func StartServiceBackground(cfg *config.Config, configPath string, localPassword string, extraServerOpts ...api.ServerOption) (cancel func(), done <-chan struct{}) {
+	return StartServiceBackgroundWithPluginHost(cfg, configPath, localPassword, nil, extraServerOpts...)
 }
 
 // StartServiceBackgroundWithPluginHost starts the proxy service with a shared plugin host.
