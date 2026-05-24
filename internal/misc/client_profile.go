@@ -4,6 +4,7 @@ package misc
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"strings"
 )
 
@@ -47,4 +48,51 @@ func stableProfileIndex(seed string, n int) int {
 // preserves legacy behavior (darwin/arm64).
 func AntigravityProfileForAuth(authID string) ClientProfile {
 	return antigravityProfilePool[stableProfileIndex(authID, len(antigravityProfilePool))]
+}
+
+// CodexProfile describes a per-credential Codex client fingerprint. Codex
+// uses macOS-flavored UA tokens ("Mac OS 26.3.1; arm64") rather than the
+// Node-style tokens used by Antigravity. Terminal is the trailing
+// "<app>/<version>" suffix that the Rust codex_cli_rs appends after the
+// parenthetical OS/arch group.
+type CodexProfile struct {
+	CLIVer   string
+	OSToken  string
+	Arch     string
+	Terminal string
+}
+
+// codexProfilePool is a small pool of realistic Codex client fingerprints
+// observed in the wild. Mac dominates because Codex is primarily distributed
+// to macOS developers; one Linux entry is included to cover Linux users
+// installing via cargo. The pool intentionally varies CLI version, OS
+// version, arch and terminal so two credentials hashed to different entries
+// produce visibly different UAs.
+var codexProfilePool = []CodexProfile{
+	{CLIVer: "0.118.0", OSToken: "Mac OS 26.3.1", Arch: "arm64", Terminal: "iTerm.app/3.6.9"},
+	{CLIVer: "0.118.0", OSToken: "Mac OS 26.3.0", Arch: "arm64", Terminal: "iTerm.app/3.6.8"},
+	{CLIVer: "0.118.0", OSToken: "Mac OS 26.2.0", Arch: "arm64", Terminal: "Apple_Terminal/453"},
+	{CLIVer: "0.117.0", OSToken: "Mac OS 15.6.1", Arch: "arm64", Terminal: "iTerm.app/3.6.9"},
+	{CLIVer: "0.118.0", OSToken: "Mac OS 15.6.1", Arch: "x86_64", Terminal: "iTerm.app/3.6.9"},
+	{CLIVer: "0.118.0", OSToken: "Mac OS 26.3.1", Arch: "arm64", Terminal: "WezTerm/20240320-124816-836b6e58"},
+	{CLIVer: "0.117.0", OSToken: "Linux 6.6.0", Arch: "x86_64", Terminal: "WezTerm/20240320-124816-836b6e58"},
+}
+
+// CodexProfileForAuth returns a deterministic Codex profile for the given
+// auth ID. An empty auth ID returns the first pool entry (which matches the
+// build-time codexUserAgent constant in the executor) so existing tests that
+// exercise the no-auth fallback keep passing.
+func CodexProfileForAuth(authID string) CodexProfile {
+	return codexProfilePool[stableProfileIndex(authID, len(codexProfilePool))]
+}
+
+// CodexUserAgentForAuth renders a Codex User-Agent string from the
+// per-credential profile. The format matches the real codex_cli_rs output:
+// "codex_cli_rs/<ver> (<os-token>; <arch>) <terminal>".
+func CodexUserAgentForAuth(authID string) string {
+	p := CodexProfileForAuth(authID)
+	if p.Terminal == "" {
+		return fmt.Sprintf("codex_cli_rs/%s (%s; %s)", p.CLIVer, p.OSToken, p.Arch)
+	}
+	return fmt.Sprintf("codex_cli_rs/%s (%s; %s) %s", p.CLIVer, p.OSToken, p.Arch, p.Terminal)
 }
