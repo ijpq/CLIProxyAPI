@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/live"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
@@ -208,6 +209,14 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 				reqCtx := coreusage.WithAPIKey(c.Request.Context(), result.Principal)
 				reqCtx = coreusage.WithAccessProvider(reqCtx, result.Provider)
 				reqCtx = coreusage.WithIsNativeKey(reqCtx, coreusage.IsNativeAccessProvider(result.Provider))
+				if userID := result.Metadata[billing.MetadataKeyUserID]; userID != "" {
+					c.Set(billing.MetadataKeyUserID, userID)
+					reqCtx = billing.WithUserID(reqCtx, userID)
+				}
+				if keyID := result.Metadata[billing.MetadataKeyAPIKeyID]; keyID != "" {
+					c.Set(billing.MetadataKeyAPIKeyID, keyID)
+					reqCtx = billing.WithAPIKeyID(reqCtx, keyID)
+				}
 				c.Request = c.Request.WithContext(reqCtx)
 			}
 			c.Next()
