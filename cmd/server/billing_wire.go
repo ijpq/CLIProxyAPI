@@ -107,6 +107,8 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 	module := portal.New(pg, tokens, topupCfg)
 	module.SetWalletChangeHook(balanceGuard.Invalidate)
 
+	startUSDTWatcher(ctx, pg, balanceGuard.Invalidate)
+
 	configurator := func(engine *gin.Engine, _ *sdkhandlers.BaseAPIHandler, _ *config.Config) {
 		group := engine.Group("/portal")
 		module.RegisterRoutes(group)
@@ -137,4 +139,29 @@ func sweepRateLimiter(l *billing.RateLimiter) {
 	for range ticker.C {
 		l.SweepStale(15 * time.Minute)
 	}
+}
+
+// startUSDTWatcher spins up the TRC20 auto-confirm poller when the operator
+// opted in. The watcher is a no-op when its required env knobs are missing
+// (wallet address or auto-confirm toggle) so the admin manual-confirm flow
+// remains the default.
+func startUSDTWatcher(ctx context.Context, sink billing.TopupConfirmer, invalidate func(userID string)) {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("BILLING_USDT_AUTO_CONFIRM")), "true") {
+		return
+	}
+	wallet := strings.TrimSpace(os.Getenv("BILLING_USDT_TRC20"))
+	if wallet == "" {
+		log.Warn("billing: USDT auto-confirm enabled but BILLING_USDT_TRC20 is empty")
+		return
+	}
+	tolerance, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_USDT_AMOUNT_TOLERANCE")), 64)
+	watcher := billing.NewUSDTTronWatcher(sink, billing.USDTTronWatcherConfig{
+		WalletAddress:   wallet,
+		TronAPIBase:     strings.TrimSpace(os.Getenv("BILLING_TRONGRID_API_BASE")),
+		TronAPIKey:      strings.TrimSpace(os.Getenv("BILLING_TRONGRID_API_KEY")),
+		PollInterval:    parseDurationDefault(os.Getenv("BILLING_USDT_POLL_INTERVAL"), 30*time.Second),
+		AmountTolerance: tolerance,
+		OnWalletChange:  invalidate,
+	})
+	watcher.Start(ctx)
 }
