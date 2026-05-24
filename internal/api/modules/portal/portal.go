@@ -28,19 +28,28 @@ type Store interface {
 	RevokeAPIKey(ctx context.Context, userID, keyID string) error
 	GetWalletBalance(ctx context.Context, userID string) (string, error)
 	ListUsage(ctx context.Context, userID string, before time.Time, limit int) ([]store.UsageRecord, error)
+
+	CreateTopupOrder(ctx context.Context, userID, method, amountStr, currency, network, walletAddress string, ttl time.Duration) (store.TopupOrder, error)
+	GetTopupOrder(ctx context.Context, id, userID string) (store.TopupOrder, error)
+	ListTopupOrders(ctx context.Context, userID string, limit int) ([]store.TopupOrder, error)
+	SubmitTopupTxHash(ctx context.Context, userID, orderID, txHash string) (store.TopupOrder, error)
+	CancelTopupOrder(ctx context.Context, userID, orderID string) error
+	ConfirmTopupOrder(ctx context.Context, orderID, adminNote string) (store.TopupOrder, error)
 }
 
 // Module bundles the portal dependencies and exposes route registration.
 type Module struct {
 	store  Store
 	tokens *billing.TokenIssuer
+	topup  *billing.TopupConfig
 	keyGen func() (raw string, err error)
 }
 
 // New builds a portal module. A nil keyGen falls back to the default 32-byte
-// random generator with the "cpk_" prefix.
-func New(s Store, tokens *billing.TokenIssuer) *Module {
-	return &Module{store: s, tokens: tokens, keyGen: defaultKeyGenerator}
+// random generator with the "cpk_" prefix. A nil topup config disables the
+// payment endpoints (they respond 503).
+func New(s Store, tokens *billing.TokenIssuer, topup *billing.TopupConfig) *Module {
+	return &Module{store: s, tokens: tokens, topup: topup, keyGen: defaultKeyGenerator}
 }
 
 // RegisterRoutes mounts the portal endpoints under the provided router group.
@@ -61,6 +70,18 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.GET("/api-keys", m.handleListKeys)
 	authed.POST("/api-keys", m.handleCreateKey)
 	authed.DELETE("/api-keys/:id", m.handleRevokeKey)
+
+	authed.GET("/topup/methods", m.handleListTopupMethods)
+	authed.POST("/topup", m.handleCreateTopupOrder)
+	authed.GET("/topup", m.handleListTopupOrders)
+	authed.GET("/topup/:id", m.handleGetTopupOrder)
+	authed.POST("/topup/:id/submit", m.handleSubmitTopupTxHash)
+	authed.POST("/topup/:id/cancel", m.handleCancelTopupOrder)
+
+	admin := r.Group("/admin")
+	admin.Use(m.AuthMiddleware(), m.adminOnly())
+	admin.GET("/topup", m.handleAdminListTopupOrders)
+	admin.POST("/topup/:id/confirm", m.handleAdminConfirmTopupOrder)
 }
 
 // defaultKeyGenerator produces a 32-byte random key encoded as

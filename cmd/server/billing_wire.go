@@ -70,7 +70,13 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 	usage.RegisterPlugin(billing.NewMeterPlugin(pg, pricing))
 
 	tokens := billing.NewTokenIssuer(secret, 24*time.Hour)
-	module := portal.New(pg, tokens)
+	topupCfg := billing.LoadTopupConfigFromEnv()
+	if len(topupCfg.Methods()) == 0 {
+		log.Warn("billing: no top-up methods configured (set BILLING_USDT_TRC20/ERC20/BEP20)")
+	} else {
+		log.Infof("billing: %d top-up method(s) loaded", len(topupCfg.Methods()))
+	}
+	module := portal.New(pg, tokens, topupCfg)
 
 	configurator := func(engine *gin.Engine, _ *sdkhandlers.BaseAPIHandler, _ *config.Config) {
 		group := engine.Group("/portal")
