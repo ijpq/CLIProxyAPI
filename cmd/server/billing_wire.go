@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -68,6 +69,19 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 		log.Warn("BILLING_PRICING_FILE not set; usage will be recorded with zero cost")
 	}
 	usage.RegisterPlugin(billing.NewMeterPlugin(pg, pricing))
+
+	if adminEmail := strings.TrimSpace(os.Getenv("BILLING_ADMIN_EMAIL")); adminEmail != "" {
+		promoteCtx, cancelPromote := context.WithTimeout(ctx, 10*time.Second)
+		switch err := pg.PromoteUserToAdmin(promoteCtx, adminEmail); {
+		case err == nil:
+			log.Infof("billing: promoted %s to admin", adminEmail)
+		case errors.Is(err, store.ErrUserNotFound):
+			log.Warnf("billing: admin email %s not yet registered; promotion will retry on next restart", adminEmail)
+		default:
+			log.Errorf("billing: promote admin %s failed: %v", adminEmail, err)
+		}
+		cancelPromote()
+	}
 
 	tokens := billing.NewTokenIssuer(secret, 24*time.Hour)
 	topupCfg := billing.LoadTopupConfigFromEnv()
