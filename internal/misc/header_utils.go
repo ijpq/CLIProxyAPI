@@ -43,10 +43,49 @@ func geminiCLIArch() string {
 // GeminiCLIUserAgent returns a User-Agent string that matches the Gemini CLI format.
 // The model parameter is included in the UA; pass "" or "unknown" when the model is not applicable.
 func GeminiCLIUserAgent(model string) string {
+	return GeminiCLIUserAgentForAuth("", model)
+}
+
+// GeminiCLIUserAgentForAuth returns a Gemini CLI User-Agent string whose
+// version/OS/arch tokens are derived from a stable per-credential profile.
+// When authID is empty, falls back to the build-default GeminiCLIVersion and
+// the host's runtime OS/arch — matching the legacy GeminiCLIUserAgent output.
+func GeminiCLIUserAgentForAuth(authID, model string) string {
 	if model == "" {
 		model = "unknown"
 	}
-	return fmt.Sprintf("GeminiCLI/%s/%s (%s; %s; terminal)", GeminiCLIVersion, model, geminiCLIOS(), geminiCLIArch())
+	version := GeminiCLIVersion
+	os := geminiCLIOS()
+	arch := geminiCLIArch()
+	if strings.TrimSpace(authID) != "" {
+		p := GeminiCLIProfileForAuth(authID)
+		if p.CLIVer != "" {
+			version = p.CLIVer
+		}
+		if p.OS != "" {
+			os = p.OS
+		}
+		if p.Arch != "" {
+			arch = p.Arch
+		}
+	}
+	return fmt.Sprintf("GeminiCLI/%s/%s (%s; %s; terminal)", version, model, os, arch)
+}
+
+// GeminiCLIApiClientHeaderForAuth renders the x-goog-api-client value with a
+// stable per-credential Node runtime version. Falls back to the build default
+// when authID is empty.
+func GeminiCLIApiClientHeaderForAuth(authID string) string {
+	if strings.TrimSpace(authID) == "" {
+		return GeminiCLIApiClientHeader
+	}
+	p := GeminiCLIProfileForAuth(authID)
+	if p.NodeVer == "" {
+		return GeminiCLIApiClientHeader
+	}
+	// google-genai-sdk version is intentionally held constant; Node version
+	// is the per-credential dimension.
+	return fmt.Sprintf("google-genai-sdk/1.41.0 gl-node/%s", p.NodeVer)
 }
 
 // ScrubProxyAndFingerprintHeaders removes all headers that could reveal
