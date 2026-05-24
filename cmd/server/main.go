@@ -599,7 +599,8 @@ func main() {
 					password = localMgmtPassword
 				}
 
-				cancel, done := cmd.StartServiceBackground(cfg, configFilePath, password)
+				billingOpts := setupBilling(context.Background(), pgStoreInst)
+				cancel, done := cmd.StartServiceBackground(cfg, configFilePath, password, billingOpts...)
 
 				client := tui.NewClient(cfg.Port, password)
 				ready := false
@@ -648,7 +649,8 @@ func main() {
 			} else if cfg.Home.Enabled {
 				log.Info("Home mode: remote model updates disabled")
 			}
-			cmd.StartService(cfg, configFilePath, password)
+			billingOpts := setupBilling(context.Background(), pgStoreInst)
+			cmd.StartService(cfg, configFilePath, password, billingOpts...)
 		}
 	}
 }
