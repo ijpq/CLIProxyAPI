@@ -247,6 +247,23 @@ func stripCodexSIWCUnsupportedFields(body []byte, hasExplicitInstructions bool, 
 	return body
 }
 
+// codexFallbackUserAgent returns the UA to use when neither the inbound
+// request nor the config supplied one. When the request is bound to a known
+// credential, a stable per-auth profile is rendered so two credentials
+// behind the proxy do not collapse onto the same Codex UA. Falls back to
+// the build-time codexUserAgent constant when no auth is available, which
+// preserves prior behavior (and existing test expectations).
+func codexFallbackUserAgent(auth *cliproxyauth.Auth) string {
+	if auth == nil {
+		return codexUserAgent
+	}
+	id := strings.TrimSpace(auth.ID)
+	if id == "" {
+		return codexUserAgent
+	}
+	return misc.CodexUserAgentForAuth(id)
+}
+
 func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, token string, stream bool, cfg *config.Config, ginHeaders http.Header) {
 	applyCodexHeadersWithSIWC(r, auth, codexUseSIWCForRequest(r.Context(), auth, ginHeaders), token, stream, cfg, ginHeaders)
 }
@@ -293,7 +310,7 @@ func applyCodexHeadersWithSIWC(r *http.Request, auth *cliproxyauth.Auth, useSIWC
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Openai-Internal-Codex-Responses-Lite", "")
 
 	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
-	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexFallbackUserAgent(auth))
 
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
