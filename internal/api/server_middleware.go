@@ -219,6 +219,9 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 				}
 				c.Request = c.Request.WithContext(reqCtx)
 			}
+			if runPostAuthHandlers(c) {
+				return
+			}
 			c.Next()
 			return
 		}
