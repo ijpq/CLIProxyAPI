@@ -786,7 +786,8 @@ func main() {
 					password = localMgmtPassword
 				}
 
-				cancel, done := cmd.StartServiceBackgroundWithPluginHost(cfg, configFilePath, password, pluginHost, serverOptions...)
+				billingOpts := setupBilling(context.Background(), pgStoreInst)
+				cancel, done := cmd.StartServiceBackgroundWithPluginHost(cfg, configFilePath, password, pluginHost, append(serverOptions, billingOpts...)...)
 
 				client := tui.NewClient(cfg.Port, password)
 				ready := false
@@ -832,7 +833,8 @@ func main() {
 			managementasset.StartAutoUpdater(context.Background(), configFilePath)
 			misc.StartAntigravityVersionUpdater(context.Background())
 			registry.SetLocalModelCatalogs(localModel)
-			cmd.StartServiceWithPluginHost(cfg, configFilePath, password, pluginHost, serverOptions...)
+			billingOpts := setupBilling(context.Background(), pgStoreInst)
+			cmd.StartServiceWithPluginHost(cfg, configFilePath, password, pluginHost, append(serverOptions, billingOpts...)...)
 		}
 	}
 }
