@@ -314,6 +314,35 @@ func (s *PostgresStore) ListUsage(ctx context.Context, userID string, before tim
 	return out, nil
 }
 
+// PromoteUserToAdmin sets is_admin=true for the user with the given email.
+// Returns ErrUserNotFound when no row matches so callers can decide whether
+// to retry later (e.g. after the operator registers).
+func (s *PostgresStore) PromoteUserToAdmin(ctx context.Context, email string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("postgres store: not initialized")
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return ErrUserNotFound
+	}
+	query := fmt.Sprintf(
+		"UPDATE %s SET is_admin = TRUE, updated_at = NOW() WHERE email = $1",
+		s.fullTableName(BillingUsersTable),
+	)
+	res, err := s.db.ExecContext(ctx, query, email)
+	if err != nil {
+		return fmt.Errorf("postgres store: promote admin: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("postgres store: promote admin rows: %w", err)
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 // isUniqueViolation reports whether err looks like a Postgres unique_violation
 // (SQLSTATE 23505). We avoid importing pgconn to keep the dependency surface
 // small; the textual check is sufficient for the stdlib database/sql path.
