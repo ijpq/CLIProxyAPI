@@ -894,7 +894,7 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	if isAPIKey {
 		ensureHeaderWithPriority(headers, ginHeaders, "User-Agent", "", "")
 	} else {
-		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexFallbackUserAgent(auth))
 	}
 
 	betaHeader := strings.TrimSpace(headers.Get("OpenAI-Beta"))
@@ -1002,6 +1002,23 @@ func deleteHeaderCaseInsensitive(headers http.Header, key string) {
 			delete(headers, existingKey)
 		}
 	}
+}
+
+// codexFallbackUserAgent returns the UA to use when neither the inbound
+// request nor the config supplied one. When the request is bound to a known
+// credential, a stable per-auth profile is rendered so two credentials
+// behind the proxy do not collapse onto the same Codex UA. Falls back to
+// the build-time codexUserAgent constant when no auth is available, which
+// preserves prior behavior (and existing test expectations).
+func codexFallbackUserAgent(auth *cliproxyauth.Auth) string {
+	if auth == nil {
+		return codexUserAgent
+	}
+	id := strings.TrimSpace(auth.ID)
+	if id == "" {
+		return codexUserAgent
+	}
+	return misc.CodexUserAgentForAuth(id)
 }
 
 func codexHeaderDefaults(cfg *config.Config, auth *cliproxyauth.Auth) (string, string) {
