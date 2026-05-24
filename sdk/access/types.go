@@ -28,8 +28,16 @@ const (
 	// AccessProviderTypeConfigAPIKey is the built-in provider validating inline API keys.
 	AccessProviderTypeConfigAPIKey = "config-api-key"
 
+	// AccessProviderTypeDBAPIKey validates API keys against the database-backed
+	// billing store and surfaces the owning user identifier on success.
+	AccessProviderTypeDBAPIKey = "db-api-key"
+
 	// DefaultAccessProviderName is applied when no provider name is supplied.
 	DefaultAccessProviderName = "config-inline"
+
+	// DefaultDBAccessProviderName is the default identifier for the database
+	// API key provider.
+	DefaultDBAccessProviderName = "db-api-key"
 )
 
 // MakeInlineAPIKeyProvider constructs an inline API key provider configuration.
