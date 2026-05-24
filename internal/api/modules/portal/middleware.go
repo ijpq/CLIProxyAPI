@@ -40,6 +40,19 @@ func userIDFromGin(c *gin.Context) string {
 	return id
 }
 
+// adminOnly rejects requests whose token does not carry the admin flag.
+// Must be installed after AuthMiddleware.
+func (m *Module) adminOnly() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		v, _ := c.Get(ginCtxIsAdmin)
+		if isAdmin, _ := v.(bool); !isAdmin {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin only"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func extractBearer(header string) string {
 	if header == "" {
 		return ""
