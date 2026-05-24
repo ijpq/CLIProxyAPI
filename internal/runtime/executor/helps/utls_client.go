@@ -78,7 +78,11 @@ func (t *utlsRoundTripper) createConnection(ctx context.Context, host, addr stri
 	}
 
 	tlsConfig := &tls.Config{ServerName: host}
-	tlsConn := tls.UClient(conn, tlsConfig, tls.HelloChrome_Auto)
+	tlsConn, err := newUtlsConnForHost(conn, tlsConfig, host)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
 
 	if errHandshake := tlsConn.HandshakeContext(ctx); errHandshake != nil {
 		if errors.Is(errHandshake, context.Canceled) || errors.Is(errHandshake, context.DeadlineExceeded) {
@@ -100,6 +104,24 @@ func (t *utlsRoundTripper) createConnection(ctx context.Context, host, addr stri
 	}
 
 	return h2Conn, nil
+}
+
+// newUtlsConnForHost builds a utls connection whose ClientHello matches the
+// real client that talks to host. Anthropic / OpenAI hosts get Chrome's
+// HelloID; Google Code Assist hosts get the Node.js spec so the TLS layer
+// is consistent with the Node UA the executors emit.
+func newUtlsConnForHost(conn net.Conn, tlsConfig *tls.Config, host string) (*tls.UConn, error) {
+	switch utlsProtectedHosts[strings.ToLower(host)] {
+	case fpNodeJS:
+		uc := tls.UClient(conn, tlsConfig, tls.HelloCustom)
+		spec := nodeJSHelloSpec()
+		if err := uc.ApplyPreset(&spec); err != nil {
+			return nil, err
+		}
+		return uc, nil
+	default:
+		return tls.UClient(conn, tlsConfig, tls.HelloChrome_Auto), nil
+	}
 }
 
 func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -157,20 +179,26 @@ func newClaudeCodeTLSConfig(host string, sessionCache tls.ClientSessionCache) *t
 	}
 }
 
-// utlsProtectedHosts contains the OpenAI hosts that should use a Chrome TLS
-// fingerprint to mask the Go TLS stack signature.
-//
-// Google Code Assist hosts (cloudcode-pa.googleapis.com and variants) are
-// intentionally NOT included. Both Antigravity and Gemini CLI talk to those
-// hosts via the Node.js https module (UA ends in google-api-nodejs-client/...
-// or gl-node/v...), and Node uses OpenSSL, not BoringSSL. Forcing a Chrome
-// HelloID on those connections would produce a UA(Node) <-> TLS(Chrome+GREASE)
-// mismatch that is itself a strong fingerprint. Until a HelloCustom Node spec
-// is built, these hosts stay on Go's default transport.
-var utlsProtectedHosts = map[string]struct{}{
-	"chatgpt.com":       {},
-	"auth.openai.com":   {},
-	"api.openai.com":    {},
+// hostFingerprint selects which ClientHelloID applies to a given upstream.
+type hostFingerprint int
+
+const (
+	fpChrome hostFingerprint = iota
+	fpNodeJS
+)
+
+// utlsProtectedHosts maps non-Anthropic upstream hosts to the fingerprint that
+// matches their real client. OpenAI uses Chrome; Google Code Assist uses the
+// Node.js spec because both Antigravity and Gemini CLI reach it through the
+// Node https module. Anthropic is handled by the dedicated Claude Code
+// round tripper below.
+var utlsProtectedHosts = map[string]hostFingerprint{
+	"chatgpt.com":                               fpChrome,
+	"auth.openai.com":                           fpChrome,
+	"api.openai.com":                            fpChrome,
+	"cloudcode-pa.googleapis.com":               fpNodeJS,
+	"daily-cloudcode-pa.googleapis.com":         fpNodeJS,
+	"daily-cloudcode-pa.sandbox.googleapis.com": fpNodeJS,
 }
 
 // claudeCodeTLSClientHelloSpec reproduces the deterministic Node/OpenSSL
