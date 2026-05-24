@@ -157,12 +157,23 @@ func newClaudeCodeTLSConfig(host string, sessionCache tls.ClientSessionCache) *t
 	}
 }
 
-// utlsProtectedHosts contains the hosts that should use utls Chrome TLS fingerprint
-// to bypass Cloudflare's TLS fingerprinting.
+// utlsProtectedHosts contains the non-Anthropic hosts that should use a Chrome
+// TLS fingerprint to mask the Go TLS stack signature. OpenAI relies on this to
+// bypass Cloudflare fingerprinting; Antigravity and Gemini CLI Code Assist hosts are
+// included so two credentials behind the proxy do not share a Go-default
+// ja3/ja4 with every other Go-built client on the network.
+//
+// HelloChrome_Auto is used uniformly. Antigravity (Electron) maps to Chrome
+// naturally; Gemini CLI is Node.js whose actual fingerprint is BoringSSL via
+// OpenSSL, but a Chrome hello is far less identifying than Go's stdlib default.
 var utlsProtectedHosts = map[string]struct{}{
-	"chatgpt.com":       {},
-	"auth.openai.com":   {},
-	"api.openai.com":    {},
+	"chatgpt.com":                               {},
+	"auth.openai.com":                           {},
+	"api.openai.com":                            {},
+	"cloudcode-pa.googleapis.com":               {},
+	"daily-cloudcode-pa.googleapis.com":         {},
+	"daily-cloudcode-pa.sandbox.googleapis.com": {},
+	"generativelanguage.googleapis.com":         {},
 }
 
 // claudeCodeTLSClientHelloSpec reproduces the deterministic Node/OpenSSL

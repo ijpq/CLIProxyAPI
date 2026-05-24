@@ -121,10 +121,33 @@ func isAntigravityFamilyUserAgent(lower string) bool {
 	return strings.HasPrefix(lower, "antigravity/hub/") || strings.HasPrefix(lower, "antigravity/")
 }
 
+// AntigravityUserAgentForAuth returns an Antigravity User-Agent string whose
+// OS/arch tokens are picked from a stable per-credential profile. When
+// authID is empty, falls back to the legacy darwin/arm64 form.
+func AntigravityUserAgentForAuth(authID string) string {
+	if strings.TrimSpace(authID) == "" {
+		return AntigravityUserAgent()
+	}
+	p := AntigravityProfileForAuth(authID)
+	os := p.OS
+	arch := p.Arch
+	if os == "" {
+		os = "darwin"
+	}
+	if arch == "" {
+		arch = "arm64"
+	}
+	return fmt.Sprintf("antigravity/%s %s/%s", AntigravityLatestVersion(), os, arch)
+}
+
 func antigravityBaseUserAgent(userAgent string) string {
+	return antigravityBaseUserAgentForAuth("", userAgent)
+}
+
+func antigravityBaseUserAgentForAuth(authID, userAgent string) string {
 	userAgent = strings.TrimSpace(userAgent)
 	if userAgent == "" {
-		return AntigravityUserAgent()
+		return AntigravityUserAgentForAuth(authID)
 	}
 	lower := strings.ToLower(userAgent)
 	if isAntigravityFamilyUserAgent(lower) {
@@ -141,13 +164,29 @@ func antigravityBaseUserAgent(userAgent string) string {
 // AntigravityRequestUserAgent returns the short Antigravity runtime UA used by
 // generate/stream/model-list requests.
 func AntigravityRequestUserAgent(userAgent string) string {
-	return antigravityBaseUserAgent(userAgent)
+	return AntigravityRequestUserAgentForAuth("", userAgent)
+}
+
+// AntigravityRequestUserAgentForAuth is the per-credential variant of
+// AntigravityRequestUserAgent. When the caller has no configured UA and an
+// authID is supplied, the rendered UA uses a stable per-credential OS/arch
+// pick from the profile pool.
+func AntigravityRequestUserAgentForAuth(authID, userAgent string) string {
+	return antigravityBaseUserAgentForAuth(authID, userAgent)
 }
 
 // AntigravityLoadCodeAssistUserAgent returns the short Antigravity UA used by
 // loadCodeAssist requests.
 func AntigravityLoadCodeAssistUserAgent(userAgent string) string {
-	return AntigravityRequestUserAgent(userAgent)
+	return AntigravityLoadCodeAssistUserAgentForAuth("", userAgent)
+}
+
+// AntigravityLoadCodeAssistUserAgentForAuth is the per-credential variant of
+// AntigravityLoadCodeAssistUserAgent. It mirrors the short request UA so
+// loadCodeAssist requests share the same per-credential fingerprint as
+// generate/stream traffic.
+func AntigravityLoadCodeAssistUserAgentForAuth(authID, userAgent string) string {
+	return AntigravityRequestUserAgentForAuth(authID, userAgent)
 }
 
 // AntigravityOnboardUserUserAgent returns the long Antigravity control-plane UA
