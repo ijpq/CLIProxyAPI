@@ -129,23 +129,22 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // utlsHosts contains the hosts that should use utls Chrome TLS fingerprint
-// to mask the Go TLS stack signature. Anthropic/OpenAI rely on this to bypass
-// Cloudflare fingerprinting; Antigravity and Gemini CLI Code Assist hosts are
-// included so two credentials behind the proxy do not share a Go-default
-// ja3/ja4 with every other Go-built client on the network.
+// to mask the Go TLS stack signature. Only hosts whose real clients actually
+// speak Chrome BoringSSL belong here: api.anthropic.com (Claude Code uses
+// Chromium's network stack) and the OpenAI ChatGPT/auth endpoints.
 //
-// HelloChrome_Auto is used uniformly. Antigravity (Electron) maps to Chrome
-// naturally; Gemini CLI is Node.js whose actual fingerprint is BoringSSL via
-// OpenSSL, but a Chrome hello is far less identifying than Go's stdlib default.
+// Google Code Assist hosts (cloudcode-pa.googleapis.com and variants) are
+// intentionally NOT included. Both Antigravity and Gemini CLI talk to those
+// hosts via the Node.js https module (UA ends in google-api-nodejs-client/...
+// or gl-node/v...), and Node uses OpenSSL, not BoringSSL. Forcing a Chrome
+// HelloID on those connections would produce a UA(Node) <-> TLS(Chrome+GREASE)
+// mismatch that is itself a strong fingerprint. Until a HelloCustom Node spec
+// is built, these hosts stay on Go's default transport.
 var utlsHosts = map[string]struct{}{
-	"api.anthropic.com":                         {},
-	"chatgpt.com":                               {},
-	"auth.openai.com":                           {},
-	"api.openai.com":                            {},
-	"cloudcode-pa.googleapis.com":               {},
-	"daily-cloudcode-pa.googleapis.com":         {},
-	"daily-cloudcode-pa.sandbox.googleapis.com": {},
-	"generativelanguage.googleapis.com":         {},
+	"api.anthropic.com": {},
+	"chatgpt.com":       {},
+	"auth.openai.com":   {},
+	"api.openai.com":    {},
 }
 
 // fallbackRoundTripper uses utls for allow-listed HTTPS hosts and falls back
