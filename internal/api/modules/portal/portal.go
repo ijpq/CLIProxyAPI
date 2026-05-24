@@ -39,10 +39,11 @@ type Store interface {
 
 // Module bundles the portal dependencies and exposes route registration.
 type Module struct {
-	store  Store
-	tokens *billing.TokenIssuer
-	topup  *billing.TopupConfig
-	keyGen func() (raw string, err error)
+	store           Store
+	tokens          *billing.TokenIssuer
+	topup           *billing.TopupConfig
+	keyGen          func() (raw string, err error)
+	onWalletChanged func(userID string)
 }
 
 // New builds a portal module. A nil keyGen falls back to the default 32-byte
@@ -50,6 +51,15 @@ type Module struct {
 // payment endpoints (they respond 503).
 func New(s Store, tokens *billing.TokenIssuer, topup *billing.TopupConfig) *Module {
 	return &Module{store: s, tokens: tokens, topup: topup, keyGen: defaultKeyGenerator}
+}
+
+// SetWalletChangeHook registers a callback invoked after a wallet-mutating
+// operation (top-up confirmation) so downstream caches can be invalidated.
+func (m *Module) SetWalletChangeHook(fn func(userID string)) {
+	if m == nil {
+		return
+	}
+	m.onWalletChanged = fn
 }
 
 // RegisterRoutes mounts the portal endpoints under the provided router group.
