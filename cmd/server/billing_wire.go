@@ -15,6 +15,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
 	sdkhandlers "github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -54,6 +55,19 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 	// Register the DB-backed API key provider so inbound proxy requests can
 	// authenticate against the billing api_keys table.
 	dbaccess.Register("", pg.LookupAPIKey, pg.TouchAPIKeyLastUsed)
+
+	// Register the metering plugin so token usage is priced and debited.
+	pricingPath := strings.TrimSpace(os.Getenv("BILLING_PRICING_FILE"))
+	markup, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_MARKUP")), 64)
+	pricing, err := billing.LoadPricingFromFile(pricingPath, markup)
+	if err != nil {
+		log.Errorf("billing pricing load failed: %v", err)
+	} else if pricingPath != "" {
+		log.Infof("billing pricing loaded from %s (markup=%.2fx)", pricingPath, markup)
+	} else {
+		log.Warn("BILLING_PRICING_FILE not set; usage will be recorded with zero cost")
+	}
+	usage.RegisterPlugin(billing.NewMeterPlugin(pg, pricing))
 
 	tokens := billing.NewTokenIssuer(secret, 24*time.Hour)
 	module := portal.New(pg, tokens)
