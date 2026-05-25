@@ -21,6 +21,11 @@ var ErrTopupOrderNotPending = errors.New("postgres store: topup order not in a t
 // existing order's tx hash (the unique index fires).
 var ErrTopupTxHashTaken = errors.New("postgres store: topup tx hash already used")
 
+// ErrTopupAmountCollision is returned when CreateTopupOrder encounters the
+// active method+amount uniqueness constraint. The caller should retry with a
+// different fractional suffix.
+var ErrTopupAmountCollision = errors.New("postgres store: topup amount collision")
+
 // TopupOrder mirrors a row in the topup_orders table.
 type TopupOrder struct {
 	ID            string
@@ -66,6 +71,9 @@ func (s *PostgresStore) CreateTopupOrder(ctx context.Context, userID, method, am
 		&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt,
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return TopupOrder{}, ErrTopupAmountCollision
+		}
 		return TopupOrder{}, fmt.Errorf("postgres store: insert topup order: %w", err)
 	}
 	return o, nil
