@@ -3,6 +3,8 @@ package billing
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
@@ -20,9 +22,12 @@ type MeterSink interface {
 // event: it looks up pricing, computes cost, and writes the usage row plus a
 // wallet debit transactionally.
 type MeterPlugin struct {
-	sink        MeterSink
-	pricing     *PricingTable
-	invalidator func(userID string)
+	sink             MeterSink
+	pricing          *PricingTable
+	invalidator      func(userID string)
+	notifier         Notifier
+	balanceReader    BalanceReader
+	lowBalanceThresh float64
 }
 
 // NewMeterPlugin builds the plugin. Both arguments are required; passing nil
@@ -38,6 +43,17 @@ func (p *MeterPlugin) SetInvalidator(fn func(userID string)) {
 		return
 	}
 	p.invalidator = fn
+}
+
+// SetLowBalanceNotifier enables notifications when a user's balance drops
+// below the given threshold after a debit.
+func (p *MeterPlugin) SetLowBalanceNotifier(n Notifier, reader BalanceReader, threshold float64) {
+	if p == nil {
+		return
+	}
+	p.notifier = n
+	p.balanceReader = reader
+	p.lowBalanceThresh = threshold
 }
 
 // HandleUsage implements usage.Plugin.
@@ -93,6 +109,13 @@ func (p *MeterPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	}
 	if p.invalidator != nil {
 		p.invalidator(userID)
+	}
+	if p.notifier != nil && p.balanceReader != nil {
+		if raw, err := p.balanceReader.GetWalletBalance(bgCtx, userID); err == nil {
+			if bal, _ := strconv.ParseFloat(strings.TrimSpace(raw), 64); bal <= p.lowBalanceThresh && bal > p.lowBalanceThresh-cost*2 {
+				p.notifier.Send(bgCtx, fmt.Sprintf("⚠️ 用户 %s 余额不足: %.2f", userID, bal))
+			}
+		}
 	}
 }
 

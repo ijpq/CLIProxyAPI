@@ -207,6 +207,7 @@ func (m *Module) handleAdminConfirmTopupOrder(c *gin.Context) {
 	if m.onWalletChanged != nil {
 		m.onWalletChanged(order.UserID)
 	}
+	m.notify(c.Request.Context(), fmt.Sprintf("✅ 充值确认: 用户 %s, 金额 %s %s", order.UserID, order.Amount, order.Currency))
 	c.JSON(http.StatusOK, topupView(order))
 }
 
