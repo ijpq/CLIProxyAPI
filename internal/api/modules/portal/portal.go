@@ -31,12 +31,18 @@ type Store interface {
 	GetWalletBalance(ctx context.Context, userID string) (string, error)
 	ListUsage(ctx context.Context, userID string, before time.Time, limit int) ([]store.UsageRecord, error)
 
+	UpdateUserPassword(ctx context.Context, userID, newPasswordHash string) error
+
 	CreateTopupOrder(ctx context.Context, userID, method, amountStr, currency, network, walletAddress string, ttl time.Duration) (store.TopupOrder, error)
 	GetTopupOrder(ctx context.Context, id, userID string) (store.TopupOrder, error)
 	ListTopupOrders(ctx context.Context, userID string, limit int) ([]store.TopupOrder, error)
 	SubmitTopupTxHash(ctx context.Context, userID, orderID, txHash string) (store.TopupOrder, error)
 	CancelTopupOrder(ctx context.Context, userID, orderID string) error
 	ConfirmTopupOrder(ctx context.Context, orderID, adminNote string) (store.TopupOrder, error)
+	ListAllUsers(ctx context.Context, limit int) ([]store.User, error)
+	AdminCreditWallet(ctx context.Context, userID, amountStr, reference, note string) (string, error)
+	AggregateUsageByDay(ctx context.Context, userID string, days int) ([]store.DailyUsageStat, error)
+	AggregateUsageByModel(ctx context.Context, userID string, days int) ([]store.ModelUsageStat, error)
 }
 
 // Module bundles the portal dependencies and exposes route registration.
@@ -46,6 +52,7 @@ type Module struct {
 	topup           *billing.TopupConfig
 	keyGen          func() (raw string, err error)
 	onWalletChanged func(userID string)
+	notifier        billing.Notifier
 }
 
 // New builds a portal module. A nil keyGen falls back to the default 32-byte
@@ -64,6 +71,22 @@ func (m *Module) SetWalletChangeHook(fn func(userID string)) {
 	m.onWalletChanged = fn
 }
 
+// SetNotifier sets the notifier used to push operational events to external
+// channels (e.g. Telegram). A nil notifier disables notifications.
+func (m *Module) SetNotifier(n billing.Notifier) {
+	if m == nil {
+		return
+	}
+	m.notifier = n
+}
+
+func (m *Module) notify(ctx context.Context, msg string) {
+	if m == nil || m.notifier == nil {
+		return
+	}
+	m.notifier.Send(ctx, msg)
+}
+
 // RegisterRoutes mounts the portal endpoints under the provided router group.
 // Public routes (register/login) are added without auth; everything else is
 // guarded by the JWT middleware.
@@ -77,8 +100,10 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed := r.Group("")
 	authed.Use(m.AuthMiddleware())
 	authed.GET("/me", m.handleMe)
+	authed.POST("/change-password", m.handleChangePassword)
 	authed.GET("/wallet", m.handleWallet)
 	authed.GET("/usage", m.handleUsage)
+	authed.GET("/usage/stats", m.handleUsageStats)
 	authed.GET("/api-keys", m.handleListKeys)
 	authed.POST("/api-keys", m.handleCreateKey)
 	authed.DELETE("/api-keys/:id", m.handleRevokeKey)
@@ -97,6 +122,8 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	admin.Use(m.AuthMiddleware(), m.adminOnly())
 	admin.GET("/topup", m.handleAdminListTopupOrders)
 	admin.POST("/topup/:id/confirm", m.handleAdminConfirmTopupOrder)
+	admin.GET("/users", m.handleAdminListUsers)
+	admin.POST("/credit", m.handleAdminCredit)
 }
 
 // defaultKeyGenerator produces a 32-byte random key encoded as

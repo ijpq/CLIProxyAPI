@@ -104,10 +104,16 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 	} else {
 		log.Infof("billing: %d top-up method(s) loaded", len(topupCfg.Methods()))
 	}
+	notifier := billing.NewTelegramNotifierFromEnv()
+
+	meter.SetLowBalanceNotifier(notifier, pg, balanceThreshold+1)
+
 	module := portal.New(pg, tokens, topupCfg)
 	module.SetWalletChangeHook(balanceGuard.Invalidate)
+	module.SetNotifier(notifier)
 
 	startUSDTWatcher(ctx, pg, balanceGuard.Invalidate)
+	go expireOrdersLoop(pg)
 
 	configurator := func(engine *gin.Engine, _ *sdkhandlers.BaseAPIHandler, _ *config.Config) {
 		group := engine.Group("/portal")
@@ -138,6 +144,22 @@ func sweepRateLimiter(l *billing.RateLimiter) {
 	defer ticker.Stop()
 	for range ticker.C {
 		l.SweepStale(15 * time.Minute)
+	}
+}
+
+// expireOrdersLoop runs every minute and cancels topup orders past their TTL.
+func expireOrdersLoop(pg *store.PostgresStore) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		n, err := pg.ExpirePendingTopupOrders(ctx)
+		cancel()
+		if err != nil {
+			log.WithError(err).Error("billing: expire orders failed")
+		} else if n > 0 {
+			log.Infof("billing: expired %d stale topup order(s)", n)
+		}
 	}
 }
 
