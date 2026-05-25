@@ -9,6 +9,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"io/fs"
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -87,6 +89,9 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.GET("/topup/:id", m.handleGetTopupOrder)
 	authed.POST("/topup/:id/submit", m.handleSubmitTopupTxHash)
 	authed.POST("/topup/:id/cancel", m.handleCancelTopupOrder)
+
+	sub, _ := fs.Sub(staticFS, "static")
+	r.StaticFS("/ui", http.FS(sub))
 
 	admin := r.Group("/admin")
 	admin.Use(m.AuthMiddleware(), m.adminOnly())
