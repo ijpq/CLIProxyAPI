@@ -1,12 +1,16 @@
 package portal
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
 )
 
@@ -57,18 +61,42 @@ func (m *Module) handleCreateTopupOrder(c *gin.Context) {
 	}
 
 	userID := userIDFromGin(c)
-	order, err := m.store.CreateTopupOrder(
-		c.Request.Context(),
-		userID, chosen.Method,
-		strconv.FormatFloat(req.Amount, 'f', 6, 64),
-		chosen.Currency, chosen.Network, chosen.WalletAddress,
-		m.topup.OrderTTL(),
-	)
-	if err != nil {
+
+	walletAddr := chosen.WalletAddress
+	if walletAddr == "" {
+		walletAddr = chosen.QRCodeURL
+	}
+
+	var order store.TopupOrder
+	var createErr error
+
+	if chosen.RequiresUniqueAmount {
+		order, createErr = m.createOrderWithUniqueSuffix(
+			c.Request.Context(), userID, chosen, req.Amount,
+		)
+	} else {
+		order, createErr = m.store.CreateTopupOrder(
+			c.Request.Context(),
+			userID, chosen.Method,
+			strconv.FormatFloat(req.Amount, 'f', 6, 64),
+			chosen.Currency, chosen.Network, walletAddr,
+			m.topup.OrderTTL(),
+		)
+	}
+	switch {
+	case errors.Is(createErr, store.ErrTopupAmountCollision):
+		c.JSON(http.StatusConflict, gin.H{"error": "unable to generate unique amount, try a different base amount"})
+		return
+	case createErr != nil:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "create order failed"})
 		return
 	}
-	c.JSON(http.StatusCreated, topupView(order))
+
+	v := topupView(order)
+	if chosen.QRCodeURL != "" {
+		v["qr_code_url"] = chosen.QRCodeURL
+	}
+	c.JSON(http.StatusCreated, v)
 }
 
 func (m *Module) handleListTopupOrders(c *gin.Context) {
@@ -180,6 +208,38 @@ func (m *Module) handleAdminConfirmTopupOrder(c *gin.Context) {
 		m.onWalletChanged(order.UserID)
 	}
 	c.JSON(http.StatusOK, topupView(order))
+}
+
+// createOrderWithUniqueSuffix adds a random 0.01-0.99 fractional suffix to
+// the base amount and retries on collision so each active wechat/alipay order
+// has a globally-unique total. The operator matches incoming payments by
+// looking at the exact RMB amount in their personal transaction history.
+func (m *Module) createOrderWithUniqueSuffix(
+	ctx context.Context, userID string,
+	chosen billing.PaymentMethod, baseAmount float64,
+) (store.TopupOrder, error) {
+	walletAddr := chosen.WalletAddress
+	if walletAddr == "" {
+		walletAddr = chosen.QRCodeURL
+	}
+	const maxRetries = 30
+	for i := 0; i < maxRetries; i++ {
+		suffix := float64(rand.Intn(99)+1) / 100.0 // 0.01 .. 0.99
+		total := baseAmount + suffix
+		amountStr := fmt.Sprintf("%.2f", total)
+		order, err := m.store.CreateTopupOrder(
+			ctx, userID, chosen.Method, amountStr,
+			chosen.Currency, chosen.Network, walletAddr,
+			m.topup.OrderTTL(),
+		)
+		if err == nil {
+			return order, nil
+		}
+		if !errors.Is(err, store.ErrTopupAmountCollision) {
+			return store.TopupOrder{}, err
+		}
+	}
+	return store.TopupOrder{}, store.ErrTopupAmountCollision
 }
 
 func topupView(o store.TopupOrder) gin.H {
