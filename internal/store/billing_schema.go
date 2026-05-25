@@ -147,5 +147,10 @@ func billingSchemaStatements(s *PostgresStore) []string {
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_topup_user_created ON %s(user_id, created_at DESC)`, s.fullTableName(BillingTopupOrdersTable)),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_topup_status ON %s(status)`, s.fullTableName(BillingTopupOrdersTable)),
 		fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_tx_hash ON %s(tx_hash) WHERE tx_hash <> ''`, s.fullTableName(BillingTopupOrdersTable)),
+		// Active orders on the same method must have unique amounts so the
+		// operator can attribute incoming payments to a specific order when
+		// the channel (WeChat / Alipay personal QR) provides no other
+		// reference data.
+		fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_active_method_amount ON %s(method, amount) WHERE status IN ('pending','submitted')`, s.fullTableName(BillingTopupOrdersTable)),
 	}
 }
