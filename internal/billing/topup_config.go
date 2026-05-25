@@ -22,6 +22,13 @@ type PaymentMethod struct {
 	// is expected to be non-empty per method.
 	WalletAddress string `json:"wallet_address,omitempty"`
 	PaymentURL    string `json:"payment_url,omitempty"`
+	// QRCodeURL is the URL to a static personal QR code image the user scans
+	// to pay (e.g. a wechat or alipay personal collection QR).
+	QRCodeURL string `json:"qr_code_url,omitempty"`
+	// RequiresUniqueAmount signals to the portal that each active order must
+	// carry a unique total so the operator can match incoming payments by
+	// amount alone (personal QR codes provide no transaction reference).
+	RequiresUniqueAmount bool `json:"requires_unique_amount,omitempty"`
 	// Notes is operator-supplied human-readable guidance ("send only USDT-TRC20").
 	Notes string `json:"notes,omitempty"`
 }
@@ -71,6 +78,27 @@ func LoadTopupConfigFromEnv() *TopupConfig {
 			Currency:      "USDT",
 			WalletAddress: addr,
 			Notes:         notes,
+		}
+		c.methods[methodKey(m.Method, m.Network)] = m
+	}
+
+	if wechatQR := strings.TrimSpace(os.Getenv("BILLING_WECHAT_QR_URL")); wechatQR != "" {
+		m := PaymentMethod{
+			Method:               "wechat",
+			Currency:             "CNY",
+			QRCodeURL:            wechatQR,
+			RequiresUniqueAmount: true,
+			Notes:                strings.TrimSpace(os.Getenv("BILLING_WECHAT_NOTES")),
+		}
+		c.methods[methodKey(m.Method, m.Network)] = m
+	}
+	if alipayQR := strings.TrimSpace(os.Getenv("BILLING_ALIPAY_QR_URL")); alipayQR != "" {
+		m := PaymentMethod{
+			Method:               "alipay",
+			Currency:             "CNY",
+			QRCodeURL:            alipayQR,
+			RequiresUniqueAmount: true,
+			Notes:                strings.TrimSpace(os.Getenv("BILLING_ALIPAY_NOTES")),
 		}
 		c.methods[methodKey(m.Method, m.Network)] = m
 	}
