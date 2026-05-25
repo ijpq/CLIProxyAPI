@@ -112,6 +112,8 @@ tr:hover{background:#f8fafc}
       <a href="#keys" data-page="keys">API Keys</a>
       <a href="#topup" data-page="topup">充值</a>
       <a href="#usage" data-page="usage">用量</a>
+      <a href="#settings" data-page="settings">设置</a>
+      <a href="#admin" data-page="admin" id="nav-admin" class="hidden">管理</a>
     </nav>
     <button class="logout" onclick="doLogout()">退出登录</button>
   </aside>
@@ -164,11 +166,51 @@ tr:hover{background:#f8fafc}
     <!-- Usage -->
     <section id="sec-usage" class="hidden">
       <h2>用量明细</h2>
+      <div class="stats" id="usage-charts"></div>
       <div class="card">
         <table><thead><tr><th>时间</th><th>提供商</th><th>模型</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th></tr></thead>
         <tbody id="usage-list"></tbody></table>
         <div style="margin-top:.75rem;text-align:center">
           <button class="btn btn-sm" id="usage-more" onclick="loadMoreUsage()">加载更多</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="sec-settings" class="hidden">
+      <h2>设置</h2>
+      <div class="card">
+        <h3 style="margin-bottom:.75rem;font-size:1rem">修改密码</h3>
+        <div id="pw-msg"></div>
+        <form onsubmit="return doChangePassword(event)">
+          <div class="form-group"><label>当前密码</label><input type="password" id="pw-old" required></div>
+          <div class="form-group"><label>新密码 (至少8位)</label><input type="password" id="pw-new" minlength="8" required></div>
+          <button class="btn btn-primary" type="submit">修改密码</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Admin -->
+    <section id="sec-admin" class="hidden">
+      <h2>管理面板</h2>
+      <div class="card">
+        <h3 style="margin-bottom:.75rem;font-size:1rem">待确认充值</h3>
+        <table><thead><tr><th>时间</th><th>用户</th><th>方式</th><th>金额</th><th>TX Hash</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="admin-orders"></tbody></table>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:.75rem;font-size:1rem">用户列表</h3>
+        <table><thead><tr><th>邮箱</th><th>昵称</th><th>余额</th><th>注册时间</th><th>操作</th></tr></thead>
+        <tbody id="admin-users"></tbody></table>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:.75rem;font-size:1rem">手动充值</h3>
+        <div id="credit-msg"></div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end">
+          <div class="form-group" style="margin:0"><label>用户 ID</label><input id="credit-uid" style="padding:.4rem .6rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem"></div>
+          <div class="form-group" style="margin:0"><label>金额</label><input type="number" id="credit-amount" step="0.01" style="padding:.4rem .6rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem;width:100px"></div>
+          <div class="form-group" style="margin:0"><label>备注</label><input id="credit-note" style="padding:.4rem .6rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem"></div>
+          <button class="btn btn-primary btn-sm" onclick="doAdminCredit()">充值</button>
         </div>
       </div>
     </section>
@@ -236,9 +278,14 @@ function doLogout() {
 }
 
 // App
-function enterApp() {
+async function enterApp() {
   document.getElementById('page-auth').classList.add('hidden');
   document.getElementById('page-app').classList.remove('hidden');
+  try {
+    const me = await api('/me');
+    isAdmin = me.user.is_admin;
+    document.getElementById('nav-admin').classList.toggle('hidden', !isAdmin);
+  } catch(e) {}
   navigate(location.hash.slice(1) || 'dashboard');
 }
 
@@ -252,7 +299,8 @@ function navigate(page) {
   if (page === 'dashboard') loadDashboard();
   else if (page === 'keys') loadKeys();
   else if (page === 'topup') loadTopup();
-  else if (page === 'usage') { usageCursor = ''; loadUsage(true); }
+  else if (page === 'usage') { usageCursor = ''; loadUsage(true); loadUsageStats(); }
+  else if (page === 'admin') loadAdmin();
 }
 
 window.addEventListener('hashchange', () => navigate(location.hash.slice(1)));
@@ -457,6 +505,114 @@ function copyText(id) {
     const btn = el.parentElement.querySelector('.btn');
     if (btn) { const orig = btn.textContent; btn.textContent = '已复制'; setTimeout(() => btn.textContent = orig, 1500); }
   });
+}
+
+// Change password
+async function doChangePassword(e) {
+  e.preventDefault();
+  try {
+    await api('/change-password', {method:'POST', body: JSON.stringify({
+      old_password: document.getElementById('pw-old').value,
+      new_password: document.getElementById('pw-new').value
+    })});
+    document.getElementById('pw-msg').innerHTML = '<div class="msg msg-ok">密码已修改</div>';
+    document.getElementById('pw-old').value = '';
+    document.getElementById('pw-new').value = '';
+  } catch(err) { document.getElementById('pw-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
+}
+
+// Usage stats
+async function loadUsageStats() {
+  try {
+    const r = await api('/usage/stats?days=30');
+    const container = document.getElementById('usage-charts');
+    container.innerHTML = '';
+    // Daily cost chart (simple bar chart via inline SVG)
+    if (r.daily && r.daily.length > 0) {
+      const maxCost = Math.max(...r.daily.map(d => parseFloat(d.cost)), 0.001);
+      const barW = Math.max(4, Math.floor(500 / r.daily.length) - 2);
+      const chartH = 120;
+      let bars = r.daily.map((d, i) => {
+        const h = Math.max(1, (parseFloat(d.cost) / maxCost) * (chartH - 20));
+        const x = i * (barW + 2);
+        return `<rect x="${x}" y="${chartH - h}" width="${barW}" height="${h}" fill="var(--primary)" rx="2"><title>${d.date}: ${parseFloat(d.cost).toFixed(4)}</title></rect>`;
+      }).join('');
+      const svgW = r.daily.length * (barW + 2);
+      container.innerHTML += `<div class="stat-card" style="flex:2;min-width:300px">
+        <div class="label">近30天日消费</div>
+        <div style="overflow-x:auto;margin-top:.5rem">
+          <svg width="${svgW}" height="${chartH}" style="display:block">${bars}</svg>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted);margin-top:.25rem">
+          <span>${r.daily[0]?.date?.slice(5)||''}</span><span>${r.daily[r.daily.length-1]?.date?.slice(5)||''}</span>
+        </div>
+      </div>`;
+    }
+    // Model breakdown
+    if (r.by_model && r.by_model.length > 0) {
+      const totalCost = r.by_model.reduce((s, m) => s + parseFloat(m.cost), 0) || 1;
+      const colors = ['#4f46e5','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316','#ec4899'];
+      let html = '<div class="label">模型分布 (近30天)</div><div style="margin-top:.5rem">';
+      r.by_model.forEach((m, i) => {
+        const pct = (parseFloat(m.cost) / totalCost * 100).toFixed(1);
+        html += `<div style="display:flex;align-items:center;gap:.5rem;margin:.25rem 0;font-size:.8rem">
+          <span style="width:10px;height:10px;border-radius:50%;background:${colors[i%colors.length]};flex-shrink:0"></span>
+          <span style="flex:1">${esc(m.model)}</span>
+          <span style="color:var(--muted)">${pct}%</span>
+          <span style="font-weight:600">${parseFloat(m.cost).toFixed(4)}</span>
+        </div>`;
+      });
+      html += '</div>';
+      container.innerHTML += `<div class="stat-card" style="min-width:200px">${html}</div>`;
+    }
+  } catch(err) { /* stats are non-critical */ }
+}
+
+// Admin
+let isAdmin = false;
+async function loadAdmin() {
+  if (!isAdmin) return;
+  try {
+    const [ordersR, usersR] = await Promise.all([
+      api('/admin/topup?limit=100'), api('/admin/users')
+    ]);
+    const oTbody = document.getElementById('admin-orders');
+    const activeOrders = ordersR.orders.filter(o => o.status === 'pending' || o.status === 'submitted');
+    oTbody.innerHTML = activeOrders.length ? activeOrders.map(o => `<tr>
+      <td>${fmtTime(o.created_at)}</td><td>${esc(o.user_id).slice(0,8)}...</td>
+      <td>${esc(o.method)}${o.network ? ' '+esc(o.network) : ''}</td>
+      <td>${esc(o.amount)} ${esc(o.currency)}</td>
+      <td>${o.tx_hash ? '<code>'+esc(o.tx_hash).slice(0,16)+'...</code>' : '-'}</td>
+      <td>${statusBadge(o.status)}</td>
+      <td><button class="btn btn-success btn-sm" onclick="adminConfirm('${o.id}')">确认</button></td>
+    </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--muted)">无待确认订单</td></tr>';
+
+    const uTbody = document.getElementById('admin-users');
+    uTbody.innerHTML = usersR.users.map(u => `<tr>
+      <td>${esc(u.email)}</td><td>${esc(u.display_name||'-')}</td>
+      <td>${parseFloat(u.balance||'0').toFixed(2)}</td>
+      <td>${fmtTime(u.created_at)}</td>
+      <td><button class="btn btn-sm" onclick="document.getElementById('credit-uid').value='${u.id}'">选中</button></td>
+    </tr>`).join('');
+  } catch(err) { if (err.status === 403) { isAdmin = false; } }
+}
+
+async function adminConfirm(id) {
+  if (!confirm('确认此充值订单？将立即给用户加余额。')) return;
+  try { await api('/admin/topup/' + id + '/confirm', {method:'POST', body:'{}'}); alert('已确认'); loadAdmin(); }
+  catch(err) { alert(err.message); }
+}
+
+async function doAdminCredit() {
+  const uid = document.getElementById('credit-uid').value.trim();
+  const amount = parseFloat(document.getElementById('credit-amount').value);
+  const note = document.getElementById('credit-note').value.trim();
+  if (!uid || !amount) return alert('请填写用户 ID 和金额');
+  try {
+    const r = await api('/admin/credit', {method:'POST', body:JSON.stringify({user_id:uid, amount, note})});
+    document.getElementById('credit-msg').innerHTML = `<div class="msg msg-ok">充值成功，新余额: ${r.balance}</div>`;
+    loadAdmin();
+  } catch(err) { document.getElementById('credit-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
 }
 
 // Init

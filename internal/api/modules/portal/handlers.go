@@ -3,6 +3,7 @@ package portal
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -21,6 +22,11 @@ type registerRequest struct {
 type loginRequest struct {
 	Email    string `json:"email" binding:"required,email"`
 	Password string `json:"password" binding:"required"`
+}
+
+type changePasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required,min=8"`
 }
 
 type createKeyRequest struct {
@@ -52,6 +58,7 @@ func (m *Module) handleRegister(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "issue token failed"})
 		return
 	}
+	m.notify(c.Request.Context(), fmt.Sprintf("🆕 新用户注册: %s", user.Email))
 	c.JSON(http.StatusCreated, gin.H{
 		"token": token,
 		"user":  userView(user),
@@ -90,6 +97,34 @@ func (m *Module) handleLogin(c *gin.Context) {
 		"token": token,
 		"user":  userView(user),
 	})
+}
+
+func (m *Module) handleChangePassword(c *gin.Context) {
+	userID := userIDFromGin(c)
+	var req changePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	user, err := m.store.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	if err := billing.ComparePassword(user.PasswordHash, req.OldPassword); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "原密码错误"})
+		return
+	}
+	hash, err := billing.HashPassword(req.NewPassword)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "password hash failed"})
+		return
+	}
+	if err := m.store.UpdateUserPassword(c.Request.Context(), userID, hash); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update password failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "密码已修改"})
 }
 
 func (m *Module) handleMe(c *gin.Context) {
