@@ -10,19 +10,58 @@ services:
         COMMIT: ${COMMIT:-none}
         BUILD_DATE: ${BUILD_DATE:-unknown}
     container_name: cli-proxy-api
-    # env_file:
-    #   - .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       DEPLOY: ${DEPLOY:-}
+      TZ: ${TZ:-Asia/Shanghai}
+      # Postgres token store (optional, requires the "postgres" profile)
+      PGSTORE_DSN: ${PGSTORE_DSN:-}
+      PGSTORE_SCHEMA: ${PGSTORE_SCHEMA:-public}
+      PGSTORE_LOCAL_PATH: ${PGSTORE_LOCAL_PATH:-}
     ports:
-      - "8317:8317"
-      - "8085:8085"
-      - "1455:1455"
-      - "54545:54545"
-      - "51121:51121"
-      - "11451:11451"
+      - "${PROXY_PORT:-8317}:8317"   # Main API port
+      - "8085:8085"                   # Gemini OAuth callback
+      - "1455:1455"                   # Codex OAuth callback
+      - "54545:54545"                 # Claude/Anthropic OAuth callback
+      - "51121:51121"                 # Antigravity OAuth callback
+      - "56121:56121"                 # xAI OAuth callback
     volumes:
-      - ${CLI_PROXY_CONFIG_PATH:-./config.yaml}:/CLIProxyAPI/config.yaml
+      - ${CLI_PROXY_CONFIG_PATH:-./config.yaml}:/CLIProxyAPI/config.yaml:ro
       - ${CLI_PROXY_AUTH_PATH:-./auths}:/root/.cli-proxy-api
       - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8317/v1/models || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+
+  # Optional Postgres token store — start with:
+  #   docker compose --profile postgres up -d
+  postgres:
+    profiles: [postgres]
+    image: postgres:16-alpine
+    container_name: cli-proxy-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cliproxy}
+      POSTGRES_USER: ${POSTGRES_USER:-cliproxy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required when using the postgres profile}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cliproxy} -d ${POSTGRES_DB:-cliproxy}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
