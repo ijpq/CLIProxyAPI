@@ -209,6 +209,128 @@ func (h *Handler) GetRequestErrorLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"files": files})
 }
 
+// GetRequestLogs lists all per-request log files on disk, including both
+// normal request logs (written when RequestLog is enabled) and error logs
+// (written on failures regardless of the RequestLog flag).
+//
+// Unlike GetRequestErrorLogs, the result is not gated on RequestLog so the
+// management panel can browse files written before/after the toggle.
+func (h *Handler) GetRequestLogs(c *gin.Context) {
+	if h == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "handler unavailable"})
+		return
+	}
+	if h.cfg == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "configuration unavailable"})
+		return
+	}
+
+	dir := h.logDirectory()
+	if strings.TrimSpace(dir) == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "log directory not configured"})
+		return
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusOK, gin.H{"files": []any{}})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to list request logs: %v", err)})
+		return
+	}
+
+	limit := 0
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		n, errParse := strconv.Atoi(raw)
+		if errParse != nil || n < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		limit = n
+	}
+
+	type requestLog struct {
+		Name      string `json:"name"`
+		RequestID string `json:"request_id"`
+		IsError   bool   `json:"is_error"`
+		Size      int64  `json:"size"`
+		Modified  int64  `json:"modified"`
+	}
+
+	files := make([]requestLog, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		reqID, ok := extractRequestLogID(name)
+		if !ok {
+			continue
+		}
+		info, errInfo := entry.Info()
+		if errInfo != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read log info for %s: %v", name, errInfo)})
+			return
+		}
+		files = append(files, requestLog{
+			Name:      name,
+			RequestID: reqID,
+			IsError:   strings.HasPrefix(name, "error-"),
+			Size:      info.Size(),
+			Modified:  info.ModTime().Unix(),
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool { return files[i].Modified > files[j].Modified })
+
+	if limit > 0 && len(files) > limit {
+		files = files[:limit]
+	}
+
+	c.JSON(http.StatusOK, gin.H{"files": files})
+}
+
+// extractRequestLogID returns the trailing request ID for filenames that match
+// the request-log convention "{path}-{timestamp}-{reqID}.log" (or the
+// "error-" prefixed variant). It deliberately rejects application log files
+// like "main.log" and rotated variants such as "main.log.1".
+func extractRequestLogID(name string) (string, bool) {
+	if !strings.HasSuffix(name, ".log") {
+		return "", false
+	}
+	if name == defaultLogFileName {
+		return "", false
+	}
+	if _, rotated := rotationOrder(name); rotated {
+		return "", false
+	}
+	stem := strings.TrimSuffix(name, ".log")
+	idx := strings.LastIndex(stem, "-")
+	if idx < 0 || idx == len(stem)-1 {
+		return "", false
+	}
+	id := stem[idx+1:]
+	if !isHexRequestID(id) {
+		return "", false
+	}
+	return id, true
+}
+
+func isHexRequestID(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
 // GetRequestLogByID finds and downloads a request log file by its request ID.
 // The ID is matched against the suffix of log file names (format: *-{requestID}.log).
 func (h *Handler) GetRequestLogByID(c *gin.Context) {
