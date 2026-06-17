@@ -13,6 +13,7 @@ import (
 
 	tls "github.com/refraction-networking/utls"
 	internalcache "github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/chromeh2"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/httpwire"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -150,7 +151,7 @@ func roundTripUtlsConnection(req *http.Request, tlsConn *tls.UConn) (*http.Respo
 			Close() error
 		}
 		if utlsProtectedHosts[strings.ToLower(req.URL.Hostname())] == fpChrome {
-			h2Conn, err = newChromeH2Conn(tlsConn)
+			h2Conn, err = chromeh2.NewConn(tlsConn)
 		} else {
 			h2Conn, err = (&http2.Transport{}).NewClientConn(tlsConn)
 		}
