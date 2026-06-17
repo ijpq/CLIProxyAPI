@@ -22,9 +22,9 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// utlsRoundTripper implements http.RoundTripper using a Chrome fingerprint for
-// providers that require browser-like TLS. The HTTP version follows ALPN. Each
-// request gets a dedicated connection that is closed with the response body.
+// utlsRoundTripper implements http.RoundTripper using the configured TLS and
+// HTTP/2 fingerprints for protected providers. The HTTP version follows ALPN.
+// Each request gets a dedicated connection that is closed with the response body.
 type utlsRoundTripper struct {
 	dialer proxy.Dialer
 }
@@ -145,9 +145,17 @@ func roundTripUtlsConnection(req *http.Request, tlsConn *tls.UConn) (*http.Respo
 	var err error
 	switch protocol := tlsConn.ConnectionState().NegotiatedProtocol; protocol {
 	case "h2":
-		h2Conn, errClientConn := (&http2.Transport{}).NewClientConn(tlsConn)
-		if errClientConn != nil {
-			err = fmt.Errorf("utls: initialize HTTP/2 connection: %w", errClientConn)
+		var h2Conn interface {
+			RoundTrip(*http.Request) (*http.Response, error)
+			Close() error
+		}
+		if utlsProtectedHosts[strings.ToLower(req.URL.Hostname())] == fpChrome {
+			h2Conn, err = newChromeH2Conn(tlsConn)
+		} else {
+			h2Conn, err = (&http2.Transport{}).NewClientConn(tlsConn)
+		}
+		if err != nil {
+			err = fmt.Errorf("utls: initialize HTTP/2 connection: %w", err)
 			break
 		}
 		closeConnection = h2Conn.Close
