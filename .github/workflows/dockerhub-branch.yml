@@ -6,6 +6,7 @@ on:
       - main
       - dev
       - claude_update
+      - 'claude/**'
   workflow_dispatch:
 
 env:
