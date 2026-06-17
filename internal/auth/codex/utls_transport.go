@@ -9,18 +9,25 @@ import (
 	"sync"
 
 	tls "github.com/refraction-networking/utls"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/chromeh2"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/net/http2"
 	"golang.org/x/net/proxy"
 )
+
+// utlsH2Conn is the subset of an HTTP/2 client connection the round tripper
+// needs. It is satisfied by *chromeh2.Conn.
+type utlsH2Conn interface {
+	CanTakeNewRequest() bool
+	RoundTrip(*http.Request) (*http.Response, error)
+}
 
 // utlsRoundTripper implements http.RoundTripper using utls with Chrome
 // fingerprint to bypass Cloudflare's TLS fingerprinting on OpenAI domains.
 type utlsRoundTripper struct {
 	mu          sync.Mutex
-	connections map[string]*http2.ClientConn
+	connections map[string]utlsH2Conn
 	pending     map[string]*sync.Cond
 	dialer      proxy.Dialer
 }
@@ -36,25 +43,25 @@ func newUtlsRoundTripper(cfg *config.SDKConfig) *utlsRoundTripper {
 		}
 	}
 	return &utlsRoundTripper{
-		connections: make(map[string]*http2.ClientConn),
+		connections: make(map[string]utlsH2Conn),
 		pending:     make(map[string]*sync.Cond),
 		dialer:      dialer,
 	}
 }
 
-func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (*http2.ClientConn, error) {
+func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (utlsH2Conn, error) {
 	t.mu.Lock()
 
-	if h2Conn, ok := t.connections[host]; ok && h2Conn.CanTakeNewRequest() {
+	if cc, ok := t.connections[host]; ok && cc.CanTakeNewRequest() {
 		t.mu.Unlock()
-		return h2Conn, nil
+		return cc, nil
 	}
 
 	if cond, ok := t.pending[host]; ok {
 		cond.Wait()
-		if h2Conn, ok := t.connections[host]; ok && h2Conn.CanTakeNewRequest() {
+		if cc, ok := t.connections[host]; ok && cc.CanTakeNewRequest() {
 			t.mu.Unlock()
-			return h2Conn, nil
+			return cc, nil
 		}
 	}
 
@@ -62,7 +69,7 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (*http2.Clie
 	t.pending[host] = cond
 	t.mu.Unlock()
 
-	h2Conn, err := t.createConnection(host, addr)
+	cc, err := t.createConnection(host, addr)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -74,11 +81,11 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (*http2.Clie
 		return nil, err
 	}
 
-	t.connections[host] = h2Conn
-	return h2Conn, nil
+	t.connections[host] = cc
+	return cc, nil
 }
 
-func (t *utlsRoundTripper) createConnection(host, addr string) (*http2.ClientConn, error) {
+func (t *utlsRoundTripper) createConnection(host, addr string) (utlsH2Conn, error) {
 	conn, err := t.dialer.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -92,14 +99,16 @@ func (t *utlsRoundTripper) createConnection(host, addr string) (*http2.ClientCon
 		return nil, err
 	}
 
-	tr := &http2.Transport{}
-	h2Conn, err := tr.NewClientConn(tlsConn)
+	// Use the Chrome-aligned HTTP/2 layer so the OAuth token exchange/refresh
+	// against auth.openai.com presents a Chrome TLS hello AND a Chrome HTTP/2
+	// fingerprint, rather than Chrome TLS over Go's standard HTTP/2.
+	cc, err := chromeh2.NewConn(tlsConn)
 	if err != nil {
 		_ = tlsConn.Close()
 		return nil, err
 	}
 
-	return h2Conn, nil
+	return cc, nil
 }
 
 func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -110,15 +119,15 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	hostname := req.URL.Hostname()
 
-	h2Conn, err := t.getOrCreateConnection(hostname, addr)
+	cc, err := t.getOrCreateConnection(hostname, addr)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := h2Conn.RoundTrip(req)
+	resp, err := cc.RoundTrip(req)
 	if err != nil {
 		t.mu.Lock()
-		if cached, ok := t.connections[hostname]; ok && cached == h2Conn {
+		if cached, ok := t.connections[hostname]; ok && cached == cc {
 			delete(t.connections, hostname)
 		}
 		t.mu.Unlock()

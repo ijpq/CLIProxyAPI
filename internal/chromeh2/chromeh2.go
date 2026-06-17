@@ -1,4 +1,4 @@
-package helps
+package chromeh2
 
 // This file implements a minimal HTTP/2 client whose on-wire fingerprint
 // matches Chrome rather than Go's standard library. The standard
@@ -9,7 +9,7 @@ package helps
 // pseudo-header order :authority,:method,:path,:scheme. Pairing a Chrome TLS
 // ClientHello (via utls) with that HTTP/2 layer is itself a strong signal.
 //
-// chromeH2Conn speaks HTTP/2 directly on top of an already-established
+// Conn speaks HTTP/2 directly on top of an already-established
 // (utls) TLS connection, emitting Chrome's akamai HTTP/2 fingerprint:
 //
 //	SETTINGS  1:65536;2:0;4:6291456;6:262144
@@ -29,6 +29,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,9 +75,49 @@ var hopByHopH2Headers = map[string]struct{}{
 	"host":              {},
 }
 
-// chromeH2Conn is a single HTTP/2 connection that talks to one server with a
+// regularHeaderOrder is a best-effort, stable ordering for common request
+// headers. The Go http.Header map has no order, so without it the regular
+// headers would be emitted in a random per-request order — an anomaly no real
+// client exhibits. The exact order a given native client (Codex CLI, Claude
+// Code, Gemini CLI, ...) emits can only be matched from a packet capture; this
+// list is a plausible default. Any header not listed is appended afterwards in
+// alphabetical order so the output is always deterministic.
+var regularHeaderOrder = map[string]int{
+	"content-length":    0,
+	"content-type":      1,
+	"user-agent":        2,
+	"accept":            3,
+	"accept-encoding":   4,
+	"accept-language":   5,
+	"authorization":     6,
+	"x-api-key":         7,
+	"anthropic-version": 8,
+	"anthropic-beta":    9,
+	"openai-beta":       10,
+	"x-goog-api-client": 11,
+	"x-goog-api-key":    12,
+}
+
+// orderRegularHeaders returns the lowercased regular header names in the order
+// they should be written: known headers first (regularHeaderOrder), then any
+// remaining headers alphabetically.
+func orderRegularHeaders(names []string) {
+	sort.SliceStable(names, func(i, j int) bool {
+		pi, oki := regularHeaderOrder[names[i]]
+		pj, okj := regularHeaderOrder[names[j]]
+		if oki && okj {
+			return pi < pj
+		}
+		if oki != okj {
+			return oki
+		}
+		return names[i] < names[j]
+	})
+}
+
+// Conn is a single HTTP/2 connection that talks to one server with a
 // Chrome-like fingerprint.
-type chromeH2Conn struct {
+type Conn struct {
 	conn net.Conn
 	fr   *http2.Framer
 
@@ -87,7 +128,7 @@ type chromeH2Conn struct {
 
 	mu       sync.Mutex
 	cond     *sync.Cond // broadcast on flow-control window changes / shutdown
-	streams  map[uint32]*chromeH2Stream
+	streams  map[uint32]*stream
 	nextID   uint32
 	closed   bool
 	goneAway bool
@@ -101,10 +142,10 @@ type chromeH2Conn struct {
 	activeStreams  uint32
 }
 
-// chromeH2Stream is one request/response exchange on a connection.
-type chromeH2Stream struct {
+// stream is one request/response exchange on a connection.
+type stream struct {
 	id   uint32
-	conn *chromeH2Conn
+	conn *Conn
 
 	sendWindow int64 // our send window for this stream (peer-controlled)
 
@@ -118,13 +159,13 @@ type chromeH2Stream struct {
 	ended       bool
 }
 
-// newChromeH2Conn performs the HTTP/2 client handshake (preface + Chrome
+// NewConn performs the HTTP/2 client handshake (preface + Chrome
 // SETTINGS + WINDOW_UPDATE) on an established TLS connection and starts the
 // read loop.
-func newChromeH2Conn(conn net.Conn) (*chromeH2Conn, error) {
-	cc := &chromeH2Conn{
+func NewConn(conn net.Conn) (*Conn, error) {
+	cc := &Conn{
 		conn:           conn,
-		streams:        make(map[uint32]*chromeH2Stream),
+		streams:        make(map[uint32]*stream),
 		nextID:         1,
 		connSendWindow: h2DefaultInitialWindow,
 		peerInitWindow: h2DefaultInitialWindow,
@@ -152,13 +193,13 @@ func newChromeH2Conn(conn net.Conn) (*chromeH2Conn, error) {
 }
 
 // CanTakeNewRequest reports whether the connection can start another stream.
-func (cc *chromeH2Conn) CanTakeNewRequest() bool {
+func (cc *Conn) CanTakeNewRequest() bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 	return !cc.closed && !cc.goneAway && cc.activeStreams < cc.peerMaxStreams
 }
 
-func (cc *chromeH2Conn) close(err error) {
+func (cc *Conn) close(err error) {
 	cc.mu.Lock()
 	if cc.closed {
 		cc.mu.Unlock()
@@ -166,7 +207,7 @@ func (cc *chromeH2Conn) close(err error) {
 	}
 	cc.closed = true
 	cc.connErr = err
-	streams := make([]*chromeH2Stream, 0, len(cc.streams))
+	streams := make([]*stream, 0, len(cc.streams))
 	for _, st := range cc.streams {
 		streams = append(streams, st)
 	}
@@ -184,8 +225,8 @@ func (cc *chromeH2Conn) close(err error) {
 
 // RoundTrip sends req and returns the response. The response body streams as
 // DATA frames arrive.
-func (cc *chromeH2Conn) RoundTrip(req *http.Request) (*http.Response, error) {
-	st := &chromeH2Stream{
+func (cc *Conn) RoundTrip(req *http.Request) (*http.Response, error) {
+	st := &stream{
 		conn:   cc,
 		respCh: make(chan *http.Response, 1),
 		errCh:  make(chan error, 1),
@@ -212,7 +253,7 @@ func (cc *chromeH2Conn) RoundTrip(req *http.Request) (*http.Response, error) {
 // The caller holds wmu, so the ID is allocated and the opening HEADERS frame
 // is sent without another stream interleaving — HTTP/2 requires that the
 // stream IDs of opening HEADERS frames strictly increase.
-func (cc *chromeH2Conn) registerStreamLocked(st *chromeH2Stream) error {
+func (cc *Conn) registerStreamLocked(st *stream) error {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 	if cc.closed || cc.goneAway {
@@ -229,7 +270,7 @@ func (cc *chromeH2Conn) registerStreamLocked(st *chromeH2Stream) error {
 	return nil
 }
 
-func (cc *chromeH2Conn) removeStream(id uint32) {
+func (cc *Conn) removeStream(id uint32) {
 	cc.mu.Lock()
 	if _, ok := cc.streams[id]; ok {
 		delete(cc.streams, id)
@@ -238,7 +279,7 @@ func (cc *chromeH2Conn) removeStream(id uint32) {
 	cc.mu.Unlock()
 }
 
-func (cc *chromeH2Conn) resetStream(st *chromeH2Stream, code http2.ErrCode) {
+func (cc *Conn) resetStream(st *stream, code http2.ErrCode) {
 	cc.wmu.Lock()
 	_ = cc.fr.WriteRSTStream(st.id, code)
 	cc.wmu.Unlock()
@@ -247,7 +288,7 @@ func (cc *chromeH2Conn) resetStream(st *chromeH2Stream, code http2.ErrCode) {
 }
 
 // writeRequest encodes and writes the HEADERS (and any body DATA) for st.
-func (cc *chromeH2Conn) writeRequest(st *chromeH2Stream, req *http.Request) error {
+func (cc *Conn) writeRequest(st *stream, req *http.Request) error {
 	hasBody := req.Body != nil && req.Body != http.NoBody
 	// Read the peer max frame size before taking wmu to avoid a wmu->mu lock
 	// inversion (handleSettings takes mu->wmu).
@@ -287,7 +328,7 @@ func (cc *chromeH2Conn) writeRequest(st *chromeH2Stream, req *http.Request) erro
 // encodeHeadersLocked builds the HPACK header block with Chrome's pseudo-header
 // order (:method, :authority, :scheme, :path) followed by the regular headers.
 // The caller must hold wmu so the encode order matches the send order.
-func (cc *chromeH2Conn) encodeHeadersLocked(req *http.Request) ([]byte, error) {
+func (cc *Conn) encodeHeadersLocked(req *http.Request) ([]byte, error) {
 	authority := req.Host
 	if authority == "" {
 		authority = req.URL.Host
@@ -315,6 +356,10 @@ func (cc *chromeH2Conn) encodeHeadersLocked(req *http.Request) ([]byte, error) {
 		return nil, err
 	}
 
+	// Collect regular headers into a stable order (Go's header map iterates
+	// randomly, which would itself be a fingerprint).
+	collected := make(map[string][]string, len(req.Header))
+	names := make([]string, 0, len(req.Header))
 	for name, values := range req.Header {
 		lower := strings.ToLower(name)
 		if strings.HasPrefix(lower, ":") {
@@ -323,15 +368,22 @@ func (cc *chromeH2Conn) encodeHeadersLocked(req *http.Request) ([]byte, error) {
 		if _, skip := hopByHopH2Headers[lower]; skip {
 			continue
 		}
-		for _, v := range values {
+		if _, seen := collected[lower]; !seen {
+			names = append(names, lower)
+		}
+		collected[lower] = append(collected[lower], values...)
+	}
+	if req.ContentLength > 0 && len(collected["content-length"]) == 0 {
+		collected["content-length"] = []string{strconv.FormatInt(req.ContentLength, 10)}
+		names = append(names, "content-length")
+	}
+
+	orderRegularHeaders(names)
+	for _, lower := range names {
+		for _, v := range collected[lower] {
 			if err := write(lower, v); err != nil {
 				return nil, err
 			}
-		}
-	}
-	if req.ContentLength > 0 && req.Header.Get("Content-Length") == "" {
-		if err := write("content-length", strconv.FormatInt(req.ContentLength, 10)); err != nil {
-			return nil, err
 		}
 	}
 
@@ -342,7 +394,7 @@ func (cc *chromeH2Conn) encodeHeadersLocked(req *http.Request) ([]byte, error) {
 
 // writeHeaderBlockLocked writes a header block, splitting into CONTINUATION
 // frames when it exceeds the peer's max frame size. Caller holds wmu.
-func (cc *chromeH2Conn) writeHeaderBlockLocked(streamID uint32, block []byte, endStream bool, maxFrame int) error {
+func (cc *Conn) writeHeaderBlockLocked(streamID uint32, block []byte, endStream bool, maxFrame int) error {
 	first := block
 	var rest []byte
 	if len(block) > maxFrame {
@@ -374,7 +426,7 @@ func (cc *chromeH2Conn) writeHeaderBlockLocked(streamID uint32, block []byte, en
 
 // writeBody streams the request body as DATA frames, respecting connection and
 // stream send windows and the peer's max frame size.
-func (cc *chromeH2Conn) writeBody(st *chromeH2Stream, body io.Reader) error {
+func (cc *Conn) writeBody(st *stream, body io.Reader) error {
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := body.Read(buf)
@@ -396,7 +448,7 @@ func (cc *chromeH2Conn) writeBody(st *chromeH2Stream, body io.Reader) error {
 	}
 }
 
-func (cc *chromeH2Conn) writeData(st *chromeH2Stream, data []byte) error {
+func (cc *Conn) writeData(st *stream, data []byte) error {
 	for len(data) > 0 {
 		n, err := cc.reserveSendWindow(st, len(data))
 		if err != nil {
@@ -415,7 +467,7 @@ func (cc *chromeH2Conn) writeData(st *chromeH2Stream, data []byte) error {
 
 // reserveSendWindow blocks until connection and stream send windows allow at
 // least one byte, then reserves min(want, conn, stream, maxFrame) bytes.
-func (cc *chromeH2Conn) reserveSendWindow(st *chromeH2Stream, want int) (int, error) {
+func (cc *Conn) reserveSendWindow(st *stream, want int) (int, error) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 	for {
@@ -442,14 +494,14 @@ func (cc *chromeH2Conn) reserveSendWindow(st *chromeH2Stream, want int) (int, er
 	}
 }
 
-func (cc *chromeH2Conn) maxFrameSize() uint32 {
+func (cc *Conn) maxFrameSize() uint32 {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 	return cc.peerMaxFrame
 }
 
 // readLoop reads frames until the connection fails, dispatching to streams.
-func (cc *chromeH2Conn) readLoop() {
+func (cc *Conn) readLoop() {
 	for {
 		frame, err := cc.fr.ReadFrame()
 		if err != nil {
@@ -479,7 +531,7 @@ func (cc *chromeH2Conn) readLoop() {
 	}
 }
 
-func (cc *chromeH2Conn) handleHeaders(f *http2.MetaHeadersFrame) {
+func (cc *Conn) handleHeaders(f *http2.MetaHeadersFrame) {
 	cc.mu.Lock()
 	st := cc.streams[f.StreamID]
 	cc.mu.Unlock()
@@ -497,7 +549,7 @@ func (cc *chromeH2Conn) handleHeaders(f *http2.MetaHeadersFrame) {
 	}
 }
 
-func (cc *chromeH2Conn) handleData(f *http2.DataFrame) {
+func (cc *Conn) handleData(f *http2.DataFrame) {
 	cc.mu.Lock()
 	st := cc.streams[f.StreamID]
 	cc.mu.Unlock()
@@ -525,7 +577,7 @@ func (cc *chromeH2Conn) handleData(f *http2.DataFrame) {
 	}
 }
 
-func (cc *chromeH2Conn) handleSettings(f *http2.SettingsFrame) {
+func (cc *Conn) handleSettings(f *http2.SettingsFrame) {
 	if f.IsAck() {
 		return
 	}
@@ -563,7 +615,7 @@ func (cc *chromeH2Conn) handleSettings(f *http2.SettingsFrame) {
 	cc.wmu.Unlock()
 }
 
-func (cc *chromeH2Conn) handleWindowUpdate(f *http2.WindowUpdateFrame) {
+func (cc *Conn) handleWindowUpdate(f *http2.WindowUpdateFrame) {
 	cc.mu.Lock()
 	if f.StreamID == 0 {
 		cc.connSendWindow += int64(f.Increment)
@@ -574,7 +626,7 @@ func (cc *chromeH2Conn) handleWindowUpdate(f *http2.WindowUpdateFrame) {
 	cc.mu.Unlock()
 }
 
-func (cc *chromeH2Conn) handleRST(f *http2.RSTStreamFrame) {
+func (cc *Conn) handleRST(f *http2.RSTStreamFrame) {
 	cc.mu.Lock()
 	st := cc.streams[f.StreamID]
 	cc.mu.Unlock()
@@ -583,10 +635,10 @@ func (cc *chromeH2Conn) handleRST(f *http2.RSTStreamFrame) {
 	}
 }
 
-func (cc *chromeH2Conn) handleGoAway(f *http2.GoAwayFrame) {
+func (cc *Conn) handleGoAway(f *http2.GoAwayFrame) {
 	cc.mu.Lock()
 	cc.goneAway = true
-	var doomed []*chromeH2Stream
+	var doomed []*stream
 	for id, st := range cc.streams {
 		if id > f.LastStreamID {
 			doomed = append(doomed, st)
@@ -600,7 +652,7 @@ func (cc *chromeH2Conn) handleGoAway(f *http2.GoAwayFrame) {
 }
 
 // endStream finishes a stream's body normally (EOF) and unregisters it.
-func (cc *chromeH2Conn) endStream(st *chromeH2Stream, reason error) {
+func (cc *Conn) endStream(st *stream, reason error) {
 	cc.mu.Lock()
 	if st.ended {
 		cc.mu.Unlock()
@@ -615,7 +667,7 @@ func (cc *chromeH2Conn) endStream(st *chromeH2Stream, reason error) {
 
 // endStreamErr finishes a stream with an error, delivering it to a waiting
 // RoundTrip if the response has not been delivered yet.
-func (cc *chromeH2Conn) endStreamErr(st *chromeH2Stream, err error) {
+func (cc *Conn) endStreamErr(st *stream, err error) {
 	cc.mu.Lock()
 	if st.ended {
 		cc.mu.Unlock()
@@ -632,11 +684,11 @@ func (cc *chromeH2Conn) endStreamErr(st *chromeH2Stream, err error) {
 	st.body.closeWith(err)
 }
 
-func (st *chromeH2Stream) deliver(resp *http.Response) {
+func (st *stream) deliver(resp *http.Response) {
 	st.once.Do(func() { st.respCh <- resp })
 }
 
-func (st *chromeH2Stream) fail(err error) {
+func (st *stream) fail(err error) {
 	st.once.Do(func() { st.errCh <- err })
 }
 
@@ -655,7 +707,7 @@ func buildResponse(f *http2.MetaHeadersFrame, body *streamBuffer) *http.Response
 		ProtoMajor: 2,
 		ProtoMinor: 0,
 		Header:     header,
-		Body:       &chromeH2Body{buf: body},
+		Body:       &respBody{buf: body},
 	}
 	if cl := header.Get("Content-Length"); cl != "" {
 		if n, err := strconv.ParseInt(cl, 10, 64); err == nil {
@@ -674,14 +726,14 @@ func minInt64Chrome(a, b int64) int64 {
 	return b
 }
 
-// chromeH2Body adapts a streamBuffer to an io.ReadCloser response body.
-type chromeH2Body struct {
+// respBody adapts a streamBuffer to an io.ReadCloser response body.
+type respBody struct {
 	buf *streamBuffer
 }
 
-func (b *chromeH2Body) Read(p []byte) (int, error) { return b.buf.Read(p) }
+func (b *respBody) Read(p []byte) (int, error) { return b.buf.Read(p) }
 
-func (b *chromeH2Body) Close() error {
+func (b *respBody) Close() error {
 	b.buf.closeWith(nil)
 	return nil
 }
