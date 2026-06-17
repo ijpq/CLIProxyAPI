@@ -17,11 +17,19 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// h2Conn is the subset of an HTTP/2 client connection the round tripper needs.
+// It is satisfied by both *chromeH2Conn (Chrome-fingerprinted hosts) and
+// *http2.ClientConn (Node-fingerprinted hosts, which keep Go's HTTP/2 layer).
+type h2Conn interface {
+	CanTakeNewRequest() bool
+	RoundTrip(*http.Request) (*http.Response, error)
+}
+
 // utlsRoundTripper implements http.RoundTripper using utls with Chrome fingerprint
 // to bypass Cloudflare's TLS fingerprinting on Anthropic domains.
 type utlsRoundTripper struct {
 	mu          sync.Mutex
-	connections map[string]*http2.ClientConn
+	connections map[string]h2Conn
 	pending     map[string]*sync.Cond
 	dialer      proxy.Dialer
 }
@@ -37,25 +45,25 @@ func newUtlsRoundTripper(proxyURL string) *utlsRoundTripper {
 		}
 	}
 	return &utlsRoundTripper{
-		connections: make(map[string]*http2.ClientConn),
+		connections: make(map[string]h2Conn),
 		pending:     make(map[string]*sync.Cond),
 		dialer:      dialer,
 	}
 }
 
-func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (*http2.ClientConn, error) {
+func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (h2Conn, error) {
 	t.mu.Lock()
 
-	if h2Conn, ok := t.connections[host]; ok && h2Conn.CanTakeNewRequest() {
+	if cc, ok := t.connections[host]; ok && cc.CanTakeNewRequest() {
 		t.mu.Unlock()
-		return h2Conn, nil
+		return cc, nil
 	}
 
 	if cond, ok := t.pending[host]; ok {
 		cond.Wait()
-		if h2Conn, ok := t.connections[host]; ok && h2Conn.CanTakeNewRequest() {
+		if cc, ok := t.connections[host]; ok && cc.CanTakeNewRequest() {
 			t.mu.Unlock()
-			return h2Conn, nil
+			return cc, nil
 		}
 	}
 
@@ -63,7 +71,7 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (*http2.Clie
 	t.pending[host] = cond
 	t.mu.Unlock()
 
-	h2Conn, err := t.createConnection(host, addr)
+	cc, err := t.createConnection(host, addr)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -75,11 +83,11 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (*http2.Clie
 		return nil, err
 	}
 
-	t.connections[host] = h2Conn
-	return h2Conn, nil
+	t.connections[host] = cc
+	return cc, nil
 }
 
-func (t *utlsRoundTripper) createConnection(host, addr string) (*http2.ClientConn, error) {
+func (t *utlsRoundTripper) createConnection(host, addr string) (h2Conn, error) {
 	conn, err := t.dialer.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -97,14 +105,26 @@ func (t *utlsRoundTripper) createConnection(host, addr string) (*http2.ClientCon
 		return nil, err
 	}
 
+	// Chrome-fingerprinted hosts also get a Chrome-aligned HTTP/2 layer so the
+	// TLS ClientHello and the HTTP/2 SETTINGS/WINDOW_UPDATE/pseudo-header order
+	// agree. Node-fingerprinted hosts keep Go's standard HTTP/2 transport.
+	if utlsProtectedHosts[strings.ToLower(host)] == fpChrome {
+		cc, errH2 := newChromeH2Conn(tlsConn)
+		if errH2 != nil {
+			tlsConn.Close()
+			return nil, errH2
+		}
+		return cc, nil
+	}
+
 	tr := &http2.Transport{}
-	h2Conn, err := tr.NewClientConn(tlsConn)
+	cc, err := tr.NewClientConn(tlsConn)
 	if err != nil {
 		tlsConn.Close()
 		return nil, err
 	}
 
-	return h2Conn, nil
+	return cc, nil
 }
 
 // newUtlsConnForHost builds a utls connection whose ClientHello matches the
@@ -133,15 +153,15 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	addr := net.JoinHostPort(hostname, port)
 
-	h2Conn, err := t.getOrCreateConnection(hostname, addr)
+	cc, err := t.getOrCreateConnection(hostname, addr)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := h2Conn.RoundTrip(req)
+	resp, err := cc.RoundTrip(req)
 	if err != nil {
 		t.mu.Lock()
-		if cached, ok := t.connections[hostname]; ok && cached == h2Conn {
+		if cached, ok := t.connections[hostname]; ok && cached == cc {
 			delete(t.connections, hostname)
 		}
 		t.mu.Unlock()
