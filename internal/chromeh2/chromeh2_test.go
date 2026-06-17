@@ -1,4 +1,4 @@
-package helps
+package chromeh2
 
 import (
 	"bytes"
@@ -52,16 +52,16 @@ func serveH2(conn net.Conn, handler http.Handler) {
 	(&http2.Server{}).ServeConn(conn, &http2.ServeConnOpts{Handler: handler})
 }
 
-func newChromeH2ConnForTest(t *testing.T, conn net.Conn) *chromeH2Conn {
+func newConnForTest(t *testing.T, conn net.Conn) *Conn {
 	t.Helper()
-	cc, err := newChromeH2Conn(conn)
+	cc, err := NewConn(conn)
 	if err != nil {
-		t.Fatalf("newChromeH2Conn: %v", err)
+		t.Fatalf("NewConn: %v", err)
 	}
 	return cc
 }
 
-func doGet(t *testing.T, cc *chromeH2Conn, rawURL string) (*http.Response, string) {
+func doGet(t *testing.T, cc *Conn, rawURL string) (*http.Response, string) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -86,7 +86,7 @@ func TestChromeH2Fingerprint(t *testing.T) {
 	defer func() { _ = client.Close() }()
 	defer func() { _ = server.Close() }()
 
-	cc := newChromeH2ConnForTest(t, client)
+	cc := newConnForTest(t, client)
 
 	sf := http2.NewFramer(server, server)
 	sf.ReadMetaHeaders = hpack.NewDecoder(chromeH2HeaderTableSize, nil)
@@ -189,7 +189,7 @@ func TestChromeH2RoundTrip(t *testing.T) {
 	})
 	go serveH2(server, handler)
 
-	cc := newChromeH2ConnForTest(t, client)
+	cc := newConnForTest(t, client)
 
 	resp, body := doGet(t, cc, "https://example.com/")
 	if resp.StatusCode != http.StatusOK {
@@ -233,7 +233,7 @@ func TestChromeH2StreamingResponse(t *testing.T) {
 	})
 	go serveH2(server, handler)
 
-	cc := newChromeH2ConnForTest(t, client)
+	cc := newConnForTest(t, client)
 	_, body := doGet(t, cc, "https://example.com/stream")
 	want := "chunk-0\nchunk-1\nchunk-2\n"
 	if body != want {
@@ -259,7 +259,7 @@ func TestChromeH2LargeBodies(t *testing.T) {
 	})
 	go serveH2(server, handler)
 
-	cc := newChromeH2ConnForTest(t, client)
+	cc := newConnForTest(t, client)
 
 	payload := bytes.Repeat([]byte("0123456789abcdef"), size/16)
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com/echo", bytes.NewReader(payload))
@@ -287,7 +287,7 @@ func TestChromeH2Concurrent(t *testing.T) {
 	})
 	go serveH2(server, handler)
 
-	cc := newChromeH2ConnForTest(t, client)
+	cc := newConnForTest(t, client)
 
 	const n = 20
 	var wg sync.WaitGroup
@@ -307,5 +307,74 @@ func TestChromeH2Concurrent(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Error(err)
+	}
+}
+
+// TestChromeH2HeaderOrder asserts regular headers are emitted in the stable
+// priority order (known headers first, then unknown ones alphabetically),
+// regardless of the order they were added to the request.
+func TestChromeH2HeaderOrder(t *testing.T) {
+	client, server := h2Pipe(t)
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+
+	cc := newConnForTest(t, client)
+
+	sf := http2.NewFramer(server, server)
+	sf.ReadMetaHeaders = hpack.NewDecoder(chromeH2HeaderTableSize, nil)
+
+	preface := make([]byte, len(http2.ClientPreface))
+	if _, err := io.ReadFull(server, preface); err != nil {
+		t.Fatalf("read preface: %v", err)
+	}
+	// Drain the client's SETTINGS and WINDOW_UPDATE, then send ours.
+	for i := 0; i < 2; i++ {
+		if _, err := sf.ReadFrame(); err != nil {
+			t.Fatalf("read handshake frame %d: %v", i, err)
+		}
+	}
+	_ = sf.WriteSettings()
+
+	go func() {
+		req, _ := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+		// Added in deliberately non-priority order.
+		req.Header.Set("Z-Custom", "1")
+		req.Header.Set("X-Goog-Api-Client", "gl-node/1")
+		req.Header.Set("Authorization", "Bearer x")
+		req.Header.Set("A-Custom", "1")
+		req.Header.Set("User-Agent", "codex_cli_rs/1")
+		req.Header.Set("Content-Type", "application/json")
+		_, _ = cc.RoundTrip(req)
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for HEADERS frame")
+		}
+		frame, err := sf.ReadFrame()
+		if err != nil {
+			t.Fatalf("read frame: %v", err)
+		}
+		mh, isHeaders := frame.(*http2.MetaHeadersFrame)
+		if !isHeaders {
+			continue
+		}
+		var order []string
+		for _, hf := range mh.RegularFields() {
+			order = append(order, hf.Name)
+		}
+		want := []string{
+			"content-type",
+			"user-agent",
+			"authorization",
+			"x-goog-api-client",
+			"a-custom",
+			"z-custom",
+		}
+		if strings.Join(order, ",") != strings.Join(want, ",") {
+			t.Fatalf("regular header order = %v, want %v", order, want)
+		}
+		return
 	}
 }

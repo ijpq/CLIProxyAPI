@@ -13,6 +13,7 @@ import (
 
 	tls "github.com/refraction-networking/utls"
 	internalcache "github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/chromeh2"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/httpwire"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -108,7 +109,7 @@ func (t *utlsRoundTripper) createConnection(ctx context.Context, host, addr stri
 	// TLS ClientHello and the HTTP/2 SETTINGS/WINDOW_UPDATE/pseudo-header order
 	// agree. Node-fingerprinted hosts keep Go's standard HTTP/2 transport.
 	if utlsProtectedHosts[strings.ToLower(host)] == fpChrome {
-		cc, errH2 := newChromeH2Conn(tlsConn)
+		cc, errH2 := chromeh2.NewConn(tlsConn)
 		if errH2 != nil {
 			tlsConn.Close()
 			return nil, errH2
