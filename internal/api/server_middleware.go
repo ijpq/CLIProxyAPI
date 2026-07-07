@@ -217,6 +217,12 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 					c.Set(billing.MetadataKeyAPIKeyID, keyID)
 					reqCtx = billing.WithAPIKeyID(reqCtx, keyID)
 				}
+				if result.Metadata[billing.MetadataKeyPrivileged] == "1" {
+					reqCtx = billing.WithPrivileged(reqCtx)
+				}
+				if bound := result.Metadata[billing.MetadataKeyBoundAuthIDs]; bound != "" {
+					reqCtx = billing.WithBoundAuthIDs(reqCtx, billing.SplitBoundAuthIDs(bound))
+				}
 				c.Request = c.Request.WithContext(reqCtx)
 			}
 			if runPostAuthHandlers(c) {
