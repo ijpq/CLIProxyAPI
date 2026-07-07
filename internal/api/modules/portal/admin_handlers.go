@@ -1,17 +1,23 @@
 package portal
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
 )
 
 type adminCreditRequest struct {
 	UserID string  `json:"user_id" binding:"required"`
 	Amount float64 `json:"amount" binding:"required"`
 	Note   string  `json:"note"`
+}
+
+type adminPrivilegedRequest struct {
+	Privileged bool `json:"privileged"`
 }
 
 func (m *Module) handleAdminListUsers(c *gin.Context) {
@@ -30,13 +36,14 @@ func (m *Module) handleAdminListUsers(c *gin.Context) {
 	for _, u := range users {
 		bal, _ := m.store.GetWalletBalance(c.Request.Context(), u.ID)
 		out = append(out, gin.H{
-			"id":           u.ID,
-			"email":        u.Email,
-			"display_name": u.DisplayName,
-			"status":       u.Status,
-			"is_admin":     u.IsAdmin,
-			"balance":      bal,
-			"created_at":   u.CreatedAt,
+			"id":            u.ID,
+			"email":         u.Email,
+			"display_name":  u.DisplayName,
+			"status":        u.Status,
+			"is_admin":      u.IsAdmin,
+			"is_privileged": u.IsPrivileged,
+			"balance":       bal,
+			"created_at":    u.CreatedAt,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"users": out})
@@ -59,6 +66,26 @@ func (m *Module) handleAdminCredit(c *gin.Context) {
 	}
 	m.notify(c.Request.Context(), fmt.Sprintf("💰 管理员充值: 用户 %s, 金额 %s, 备注: %s", req.UserID, amountStr, req.Note))
 	c.JSON(http.StatusOK, gin.H{"balance": newBalance})
+}
+
+// handleAdminSetPrivileged toggles the is_privileged flag for a user.
+func (m *Module) handleAdminSetPrivileged(c *gin.Context) {
+	userID := c.Param("id")
+	var req adminPrivilegedRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := m.store.SetUserPrivileged(c.Request.Context(), userID, req.Privileged); err != nil {
+		if errors.Is(err, store.ErrUserNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update privileged failed"})
+		return
+	}
+	m.notify(c.Request.Context(), fmt.Sprintf("🔑 特权变更: 用户 %s, privileged=%t", userID, req.Privileged))
+	c.JSON(http.StatusOK, gin.H{"id": userID, "is_privileged": req.Privileged})
 }
 
 func (m *Module) handleUsageStats(c *gin.Context) {

@@ -1825,6 +1825,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	opts.Metadata[cliproxyexecutor.SessionAffinityProviderMetadataKey] = provider
 
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
+	allowedAuthIDs := allowedAuthIDsFromMetadata(opts.Metadata)
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
 	pluginScheduler, schedulerAcross := m.snapshotPluginScheduler()
 
@@ -1859,6 +1860,11 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		}
 		if pinnedAuthID != "" && candidate.ID != pinnedAuthID {
 			continue
+		}
+		if allowedAuthIDs != nil {
+			if _, ok := allowedAuthIDs[candidate.ID]; !ok {
+				continue
+			}
 		}
 		if !eligibility.allows(candidate) {
 			continue
@@ -2155,6 +2161,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	opts.Metadata[cliproxyexecutor.SessionAffinityProviderMetadataKey] = "mixed"
 
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
+	allowedAuthIDs := allowedAuthIDsFromMetadata(opts.Metadata)
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
 
 	providerSet := make(map[string]struct{}, len(providers))
@@ -2195,6 +2202,11 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		}
 		if pinnedAuthID != "" && candidate.ID != pinnedAuthID {
 			continue
+		}
+		if allowedAuthIDs != nil {
+			if _, ok := allowedAuthIDs[candidate.ID]; !ok {
+				continue
+			}
 		}
 		if !eligibility.allows(candidate) {
 			continue

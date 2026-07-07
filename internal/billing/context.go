@@ -14,6 +14,12 @@ import "context"
 const (
 	MetadataKeyUserID   = "billing_user_id"
 	MetadataKeyAPIKeyID = "billing_api_key_id"
+	// MetadataKeyPrivileged is "1" when the owning user has the privileged
+	// flag, so the request may pin upstream accounts and bypass balance limits.
+	MetadataKeyPrivileged = "billing_privileged"
+	// MetadataKeyBoundAuthIDs carries the comma-separated upstream account IDs
+	// bound to the authenticating API key.
+	MetadataKeyBoundAuthIDs = "billing_bound_auth_ids"
 )
 
 type contextKey int
@@ -21,6 +27,8 @@ type contextKey int
 const (
 	ctxUserID contextKey = iota + 1
 	ctxAPIKeyID
+	ctxPrivileged
+	ctxBoundAuthIDs
 )
 
 // WithUserID returns a derived context carrying the authenticated user id.
@@ -54,5 +62,38 @@ func APIKeyIDFromContext(ctx context.Context) string {
 		return ""
 	}
 	v, _ := ctx.Value(ctxAPIKeyID).(string)
+	return v
+}
+
+// WithPrivileged marks the context as belonging to a privileged user.
+func WithPrivileged(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxPrivileged, true)
+}
+
+// PrivilegedFromContext reports whether the request was authenticated as a
+// privileged user.
+func PrivilegedFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(ctxPrivileged).(bool)
+	return v
+}
+
+// WithBoundAuthIDs attaches the upstream account IDs bound to the caller's API
+// key. An empty slice leaves the context unchanged.
+func WithBoundAuthIDs(ctx context.Context, ids []string) context.Context {
+	if len(ids) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxBoundAuthIDs, ids)
+}
+
+// BoundAuthIDsFromContext returns the bound upstream account IDs, or nil.
+func BoundAuthIDsFromContext(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	v, _ := ctx.Value(ctxBoundAuthIDs).([]string)
 	return v
 }
