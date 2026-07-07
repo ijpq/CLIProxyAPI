@@ -15,6 +15,42 @@ import (
 type APIKeyLookup struct {
 	ID     string
 	UserID string
+	// Privileged mirrors the owning user's is_privileged flag so the access
+	// layer can decide, without a second query, whether the request may pin
+	// upstream accounts and bypass balance enforcement.
+	Privileged bool
+	// BoundAuthIDs restricts this key's requests to a set of upstream account
+	// IDs. Empty means no restriction (normal scheduler behavior).
+	BoundAuthIDs []string
+}
+
+// EncodeAuthIDs joins upstream auth IDs into the comma-separated form stored in
+// the api_keys.bound_auth_ids column. Blank entries are dropped.
+func EncodeAuthIDs(ids []string) string {
+	cleaned := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			cleaned = append(cleaned, id)
+		}
+	}
+	return strings.Join(cleaned, ",")
+}
+
+// DecodeAuthIDs splits the comma-separated bound_auth_ids column back into a
+// slice, dropping blanks.
+func DecodeAuthIDs(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ErrAPIKeyNotFound is returned by LookupAPIKey when the supplied raw key does
@@ -41,17 +77,21 @@ func (s *PostgresStore) LookupAPIKey(ctx context.Context, keyHash string) (APIKe
 	}
 
 	query := fmt.Sprintf(
-		"SELECT id, user_id FROM %s WHERE key_hash = $1 AND revoked_at IS NULL",
-		s.fullTableName(BillingAPIKeysTable),
+		`SELECT k.id, k.user_id, u.is_privileged, k.bound_auth_ids
+		 FROM %s k JOIN %s u ON u.id = k.user_id
+		 WHERE k.key_hash = $1 AND k.revoked_at IS NULL`,
+		s.fullTableName(BillingAPIKeysTable), s.fullTableName(BillingUsersTable),
 	)
 	var out APIKeyLookup
-	err := s.db.QueryRowContext(ctx, query, keyHash).Scan(&out.ID, &out.UserID)
+	var boundRaw string
+	err := s.db.QueryRowContext(ctx, query, keyHash).Scan(&out.ID, &out.UserID, &out.Privileged, &boundRaw)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return APIKeyLookup{}, ErrAPIKeyNotFound
 	case err != nil:
 		return APIKeyLookup{}, fmt.Errorf("postgres store: lookup api key: %w", err)
 	}
+	out.BoundAuthIDs = DecodeAuthIDs(boundRaw)
 	return out, nil
 }
 
