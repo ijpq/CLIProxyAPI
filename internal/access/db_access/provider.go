@@ -85,14 +85,22 @@ func (p *provider) Authenticate(ctx context.Context, r *http.Request) (*sdkacces
 		}()
 	}
 
+	meta := map[string]string{
+		"source":                    source,
+		billing.MetadataKeyUserID:   lookup.UserID,
+		billing.MetadataKeyAPIKeyID: lookup.ID,
+	}
+	if lookup.Privileged {
+		meta[billing.MetadataKeyPrivileged] = "1"
+	}
+	if len(lookup.BoundAuthIDs) > 0 {
+		meta[billing.MetadataKeyBoundAuthIDs] = store.EncodeAuthIDs(lookup.BoundAuthIDs)
+	}
+
 	return &sdkaccess.Result{
 		Provider:  p.Identifier(),
 		Principal: lookup.UserID,
-		Metadata: map[string]string{
-			"source":                    source,
-			billing.MetadataKeyUserID:   lookup.UserID,
-			billing.MetadataKeyAPIKeyID: lookup.ID,
-		},
+		Metadata:  meta,
 	}, nil
 }
 

@@ -136,13 +136,17 @@ tr:hover{background:#f8fafc}
     <!-- Keys -->
     <section id="sec-keys" class="hidden">
       <h2>API Keys</h2>
-      <div style="margin-bottom:1rem;display:flex;gap:.5rem;align-items:center">
+      <div style="margin-bottom:.5rem;display:flex;gap:.5rem;align-items:center">
         <input id="key-name" placeholder="Key 名称 (可选)" style="padding:.4rem .6rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem">
         <button class="btn btn-primary btn-sm" onclick="createKey()">创建新 Key</button>
       </div>
+      <div id="key-accounts-wrap" class="hidden" style="margin-bottom:1rem">
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.3rem">绑定上游账号（特权账号专属，可多选；多选时按 CLIProxy 的轮询/fill-first 策略在其中调度；不选=不绑定，走全部账号）</label>
+        <select id="key-accounts" multiple size="4" style="width:100%;max-width:460px;padding:.4rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem"></select>
+      </div>
       <div id="new-key-msg"></div>
       <div class="card">
-        <table><thead><tr><th>前缀</th><th>名称</th><th>创建时间</th><th>最后使用</th><th>状态</th><th>操作</th></tr></thead>
+        <table><thead><tr><th>前缀</th><th>名称</th><th>绑定账号</th><th>创建时间</th><th>最后使用</th><th>状态</th><th>操作</th></tr></thead>
         <tbody id="keys-list"></tbody></table>
       </div>
     </section>
@@ -168,7 +172,7 @@ tr:hover{background:#f8fafc}
       <h2>用量明细</h2>
       <div class="stats" id="usage-charts"></div>
       <div class="card">
-        <table><thead><tr><th>时间</th><th>提供商</th><th>模型</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th></tr></thead>
+        <table><thead><tr><th>时间</th><th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th></tr></thead>
         <tbody id="usage-list"></tbody></table>
         <div style="margin-top:.75rem;text-align:center">
           <button class="btn btn-sm" id="usage-more" onclick="loadMoreUsage()">加载更多</button>
@@ -200,7 +204,7 @@ tr:hover{background:#f8fafc}
       </div>
       <div class="card">
         <h3 style="margin-bottom:.75rem;font-size:1rem">用户列表</h3>
-        <table><thead><tr><th>邮箱</th><th>昵称</th><th>余额</th><th>注册时间</th><th>操作</th></tr></thead>
+        <table><thead><tr><th>邮箱</th><th>昵称</th><th>余额</th><th>特权</th><th>注册时间</th><th>操作</th></tr></thead>
         <tbody id="admin-users"></tbody></table>
       </div>
       <div class="card">
@@ -222,6 +226,8 @@ const BASE = location.pathname.replace(/\/ui\/?$/, '');
 let token = localStorage.getItem('portal_token');
 let selectedMethod = null;
 let usageCursor = '';
+let isPrivileged = false;
+let myAccounts = [];
 
 function api(path, opts = {}) {
   const headers = {'Content-Type': 'application/json'};
@@ -284,7 +290,10 @@ async function enterApp() {
   try {
     const me = await api('/me');
     isAdmin = me.user.is_admin;
+    isPrivileged = !!me.user.is_privileged;
     document.getElementById('nav-admin').classList.toggle('hidden', !isAdmin);
+    document.getElementById('key-accounts-wrap').classList.toggle('hidden', !isPrivileged);
+    if (isPrivileged) loadMyAccounts();
   } catch(e) {}
   navigate(location.hash.slice(1) || 'dashboard');
 }
@@ -331,17 +340,24 @@ async function loadKeys() {
     const tbody = document.getElementById('keys-list');
     tbody.innerHTML = r.keys.length ? r.keys.map(k => `<tr>
       <td><code>${esc(k.key_prefix)}...</code></td><td>${esc(k.name||'-')}</td>
+      <td>${(k.bound_auth_ids&&k.bound_auth_ids.length) ? k.bound_auth_ids.map(id=>esc(accountLabel(id))).join(', ') : '<span style="color:var(--muted)">全部</span>'}</td>
       <td>${fmtTime(k.created_at)}</td><td>${k.last_used_at ? fmtTime(k.last_used_at) : '-'}</td>
       <td>${k.revoked_at ? '<span class="badge badge-red">已吊销</span>' : '<span class="badge badge-green">活跃</span>'}</td>
       <td>${k.revoked_at ? '' : `<button class="btn btn-danger btn-sm" onclick="revokeKey('${k.id}')">吊销</button>`}</td>
-    </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--muted)">无 Key</td></tr>';
+    </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--muted)">无 Key</td></tr>';
   } catch(err) { if (err.status === 401) doLogout(); }
 }
 
 async function createKey() {
   try {
     const name = document.getElementById('key-name').value;
-    const r = await api('/api-keys', {method:'POST', body: JSON.stringify({name})});
+    const body = {name};
+    if (isPrivileged) {
+      const sel = document.getElementById('key-accounts');
+      const ids = Array.from(sel.selectedOptions).map(o => o.value);
+      if (ids.length) body.bound_auth_ids = ids;
+    }
+    const r = await api('/api-keys', {method:'POST', body: JSON.stringify(body)});
     document.getElementById('new-key-msg').innerHTML = `<div class="msg msg-ok">
       Key 已创建，请立即复制（仅显示一次）：<br>
       <div class="copy-wrap"><code id="new-key-val">${esc(r.key)}</code>
@@ -349,6 +365,24 @@ async function createKey() {
     document.getElementById('key-name').value = '';
     loadKeys();
   } catch(err) { document.getElementById('new-key-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
+}
+
+// Load the upstream accounts this privileged user may bind keys to.
+async function loadMyAccounts() {
+  try {
+    const r = await api('/accounts');
+    myAccounts = r.accounts || [];
+    const sel = document.getElementById('key-accounts');
+    if (sel) sel.innerHTML = myAccounts.map(a =>
+      `<option value="${esc(a.id)}">${esc(a.label || a.provider)} · ${esc(a.provider)}${a.status && a.status!=='active' ? ' ('+esc(a.status)+')' : ''}</option>`
+    ).join('');
+  } catch(e) {}
+}
+
+// Resolve a bound account id to a display label using the cached account list.
+function accountLabel(id) {
+  const a = myAccounts.find(x => x.id === id);
+  return a ? (a.label || a.provider) : String(id).slice(0, 8);
 }
 
 async function revokeKey(id) {
@@ -469,13 +503,14 @@ async function loadUsage(reset) {
     const r = await api(url);
     const tbody = document.getElementById('usage-list');
     if (!r.records.length) {
-      if (reset) tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--muted)">暂无记录</td></tr>';
+      if (reset) tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--muted)">暂无记录</td></tr>';
       document.getElementById('usage-more').classList.add('hidden');
       return;
     }
     document.getElementById('usage-more').classList.remove('hidden');
     tbody.innerHTML += r.records.map(u => `<tr>
       <td>${fmtTime(u.created_at)}</td><td>${esc(u.provider)}</td><td>${esc(u.model)}</td>
+      <td>${esc(u.auth_label || u.auth_id || '-')}</td>
       <td>${u.input_tokens}</td><td>${u.output_tokens}</td>
       <td>${u.cache_read_tokens}</td><td>${u.cache_write_tokens}</td>
       <td>${parseFloat(u.cost).toFixed(4)}</td><td>${statusBadge(u.status)}</td>
@@ -591,10 +626,17 @@ async function loadAdmin() {
     uTbody.innerHTML = usersR.users.map(u => `<tr>
       <td>${esc(u.email)}</td><td>${esc(u.display_name||'-')}</td>
       <td>${parseFloat(u.balance||'0').toFixed(2)}</td>
+      <td>${u.is_privileged ? '<span class="badge badge-green">是</span>' : '<span class="badge badge-gray">否</span>'}</td>
       <td>${fmtTime(u.created_at)}</td>
-      <td><button class="btn btn-sm" onclick="document.getElementById('credit-uid').value='${u.id}'">选中</button></td>
+      <td><button class="btn btn-sm" onclick="document.getElementById('credit-uid').value='${u.id}'">选中</button>
+        <button class="btn btn-sm" onclick="togglePrivileged('${u.id}', ${u.is_privileged ? 'false' : 'true'})">${u.is_privileged ? '取消特权' : '设为特权'}</button></td>
     </tr>`).join('');
   } catch(err) { if (err.status === 403) { isAdmin = false; } }
+}
+
+async function togglePrivileged(id, val) {
+  try { await api('/admin/users/' + id + '/privileged', {method:'POST', body: JSON.stringify({privileged: val})}); loadAdmin(); }
+  catch(err) { alert(err.message); }
 }
 
 async function adminConfirm(id) {
