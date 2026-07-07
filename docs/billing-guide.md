@@ -21,6 +21,7 @@ BILLING_MARKUP=1.20                       # 在上游成本上加价 20%
 BILLING_RATE_PER_SEC=5                    # 每用户每秒请求数（0=不限）
 BILLING_RATE_BURST=20                     # 突发上限
 BILLING_BALANCE_THRESHOLD=0               # 余额 ≤ 此值拒绝请求
+BILLING_PRIVILEGED_BYPASS_RATE_LIMIT=false # 特权账号是否也豁免限流（默认 false：特权仅豁免余额，仍受限流）
 
 # ===== USDT 充值 =====
 BILLING_USDT_TRC20=T...你的TRC20钱包地址
@@ -253,10 +254,49 @@ USDT 充值在链上自动确认，无需手动操作。
 | GET | /admin/topup?user_id=&limit= | 所有充值订单 |
 | POST | /admin/topup/:id/confirm | 确认充值 `{note}` |
 | POST | /admin/credit | 手动调整余额 `{user_id, amount, note}` |
+| POST | /admin/users/:id/privileged | 设置/取消用户特权 `{privileged: bool}` |
+
+特权用户额外端点：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /accounts | 列出可绑定的上游账号（id/provider/label/status） |
+| PUT | /api-keys/:id/accounts | 重新绑定某 Key 的上游账号 `{bound_auth_ids: []}` |
 
 ---
 
-## 五、常见问题
+## 五、特权账号（Privileged）
+
+特权账号用于内部/自用场景：**不受余额限制**，且其 API Key 可**绑定具体的上游账号（额度来源）**。
+
+### 5.1 授予特权
+
+管理员在「管理」页的用户列表点击「设为特权」（或调用 `POST /admin/users/:id/privileged {"privileged":true}`）。特权是用户级的，该用户名下所有 Key 都生效。
+
+### 5.2 余额与限流
+
+- **余额**：特权账号跳过余额检查（`BILLING_BALANCE_THRESHOLD` 对其无效）。用量仍会**记录**（含成本与所用上游账号），但**不从钱包扣款**，因此账单/日志可审计但不计费。
+- **限流**：默认仍受 `BILLING_RATE_PER_SEC/BURST` 限制。若要特权账号也豁免限流，设置 `BILLING_PRIVILEGED_BYPASS_RATE_LIMIT=true`。
+
+### 5.3 绑定上游账号
+
+特权用户在「API Keys」页创建 Key 时，可在「绑定上游账号」多选框里选择一个或多个上游账号：
+
+- **绑定 1 个**：该 Key 的所有请求固定走这个账号。
+- **绑定多个**：请求只在这些账号中选择，并按 CLIProxy 自身的调度策略（轮询 / fill-first）负载均衡。
+- **不绑定**：走全部可用账号（与普通用户一致）。
+
+只有特权用户能绑定；普通用户传 `bound_auth_ids` 会被拒绝。绑定的账号 ID 来自 `GET /accounts`。
+
+> 注意：绑定的上游账号必须能服务所请求的模型（例如绑定一个 Gemini 账号却请求 OpenAI 模型会失败）。请自行确保「模型 + 账号」匹配。
+
+### 5.4 审计日志
+
+每条请求的用量记录都会写入实际服务它的上游账号（`auth_id` / `auth_label`），在「用量明细」页的「账号」列可见；特权请求还会打印一条结构化日志 `billing: privileged request served (unbilled)`，含用户、账号、provider、model。由此可追溯**哪个特权账号用了哪个上游账号的额度**。
+
+---
+
+## 六、常见问题
 
 **Q: 余额显示为负数怎么办？**
 A: 扣费发生在请求完成后（后付费），如果请求期间余额被耗尽，可能产生小额负值。充值后自动恢复。设置 `BILLING_BALANCE_THRESHOLD=0` 可以在余额为 0 时就阻止新请求。

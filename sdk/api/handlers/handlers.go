@@ -360,6 +360,9 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 	if excludedAuthIDs := excludedAuthIDsFromContext(ctx); len(excludedAuthIDs) > 0 {
 		meta[coreexecutor.ExcludedAuthIDsMetadataKey] = excludedAuthIDs
 	}
+	if allowed := allowedAuthIDsFromContext(ctx); len(allowed) > 0 {
+		meta[coreexecutor.AllowedAuthIDsMetadataKey] = allowed
+	}
 	if selectedCallback := selectedAuthIDCallbackFromContext(ctx); selectedCallback != nil {
 		meta[coreexecutor.SelectedAuthCallbackMetadataKey] = selectedCallback
 	}
