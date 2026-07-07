@@ -179,6 +179,9 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 	if pinnedAuthID := pinnedAuthIDFromContext(ctx); pinnedAuthID != "" {
 		meta[coreexecutor.PinnedAuthMetadataKey] = pinnedAuthID
 	}
+	if allowed := allowedAuthIDsFromContext(ctx); len(allowed) > 0 {
+		meta[coreexecutor.AllowedAuthIDsMetadataKey] = allowed
+	}
 	if selectedCallback := selectedAuthIDCallbackFromContext(ctx); selectedCallback != nil {
 		meta[coreexecutor.SelectedAuthCallbackMetadataKey] = selectedCallback
 	}

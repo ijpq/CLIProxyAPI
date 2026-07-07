@@ -74,10 +74,26 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 
 	rate, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_RATE_PER_SEC")), 64)
 	burst, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_RATE_BURST")), 64)
-	rateLimiter := billing.NewRateLimiter(rate, burst)
+	bypassRateLimit, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("BILLING_PRIVILEGED_BYPASS_RATE_LIMIT")))
+	rateLimiter := billing.NewRateLimiter(rate, burst, bypassRateLimit)
 
 	api.RegisterPostAuthHandler(rateLimiter.Handler())
 	api.RegisterPostAuthHandler(balanceGuard.Handler())
+	// Bind privileged keys to their upstream accounts: narrow candidate
+	// selection to the bound set so CPA's own scheduler (round-robin /
+	// fill-first) load-balances within it. A single bound account behaves like
+	// a pin; an empty binding leaves normal scheduling untouched.
+	api.RegisterPostAuthHandler(func(c *gin.Context) {
+		reqCtx := c.Request.Context()
+		if !billing.PrivilegedFromContext(reqCtx) {
+			return
+		}
+		bound := billing.BoundAuthIDsFromContext(reqCtx)
+		if len(bound) == 0 {
+			return
+		}
+		c.Request = c.Request.WithContext(sdkhandlers.WithAllowedAuthIDs(reqCtx, bound))
+	})
 	go sweepRateLimiter(rateLimiter)
 
 	meter := billing.NewMeterPlugin(pg, pricing)
@@ -115,7 +131,28 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 	startUSDTWatcher(ctx, pg, balanceGuard.Invalidate)
 	go expireOrdersLoop(pg)
 
-	configurator := func(engine *gin.Engine, _ *sdkhandlers.BaseAPIHandler, _ *config.Config) {
+	configurator := func(engine *gin.Engine, baseHandler *sdkhandlers.BaseAPIHandler, _ *config.Config) {
+		// Wire the upstream-account lister from the core auth manager so the
+		// portal can list accounts for binding and the meter can resolve labels.
+		if baseHandler != nil && baseHandler.AuthManager != nil {
+			mgr := baseHandler.AuthManager
+			billing.SetAccountLister(func() []billing.Account {
+				auths := mgr.List()
+				out := make([]billing.Account, 0, len(auths))
+				for _, a := range auths {
+					if a == nil {
+						continue
+					}
+					out = append(out, billing.Account{
+						ID:       a.ID,
+						Provider: a.Provider,
+						Label:    a.Label,
+						Status:   string(a.Status),
+					})
+				}
+				return out
+			})
+		}
 		group := engine.Group("/portal")
 		module.RegisterRoutes(group)
 		log.Info("billing portal routes mounted at /portal")

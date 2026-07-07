@@ -26,6 +26,13 @@ type MeteredUsage struct {
 	Cost         string
 	Status       string
 	ErrorMessage string
+	// AuthID and AuthLabel identify which upstream account (credential) served
+	// the request, so audit logs can show which account's quota was consumed.
+	AuthID    string
+	AuthLabel string
+	// SkipDebit records the usage row for audit but leaves the wallet and
+	// transactions ledger untouched. Used for privileged (unbilled) accounts.
+	SkipDebit bool
 }
 
 // RecordUsageAndDebit writes a usage_records row, debits the wallet, and
@@ -84,8 +91,8 @@ func (s *PostgresStore) RecordUsageAndDebit(ctx context.Context, u MeteredUsage)
 		INSERT INTO %s (
 			user_id, api_key_id, request_id, provider, model,
 			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-			cost, status, error_message
-		) VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, $9, $10::numeric, $11, $12)
+			cost, status, error_message, auth_id, auth_label
+		) VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, $9, $10::numeric, $11, $12, $13, $14)
 	`, s.fullTableName(BillingUsageRecordsTable))
 
 	status := u.Status
@@ -96,10 +103,19 @@ func (s *PostgresStore) RecordUsageAndDebit(ctx context.Context, u MeteredUsage)
 	if _, err = tx.ExecContext(ctx, insertUsage,
 		u.UserID, u.APIKeyID, u.RequestID, u.Provider, u.Model,
 		u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens,
-		cost, status, u.ErrorMessage,
+		cost, status, u.ErrorMessage, u.AuthID, u.AuthLabel,
 	); err != nil {
 		err = fmt.Errorf("postgres store: insert usage: %w", err)
 		return err
+	}
+
+	// Privileged accounts are audited but not billed: the usage row above is
+	// the full record; skip the wallet debit and ledger entry.
+	if u.SkipDebit {
+		if err = tx.Commit(); err != nil {
+			return fmt.Errorf("postgres store: commit meter tx: %w", err)
+		}
+		return nil
 	}
 
 	// Upsert the wallet by subtracting cost and update transactions ledger.

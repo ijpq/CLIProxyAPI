@@ -1551,6 +1551,42 @@ func pinnedAuthIDFromMetadata(meta map[string]any) string {
 	}
 }
 
+// allowedAuthIDsFromMetadata parses AllowedAuthIDsMetadataKey into a set of auth
+// IDs the request may use. A nil result means no restriction. The value is
+// accepted as a []string or a comma-separated string. Unlike a pinned auth this
+// only narrows the candidate pool; the normal scheduler still load-balances
+// (round-robin / fill-first) among the surviving candidates.
+func allowedAuthIDsFromMetadata(meta map[string]any) map[string]struct{} {
+	if len(meta) == 0 {
+		return nil
+	}
+	raw, ok := meta[cliproxyexecutor.AllowedAuthIDsMetadataKey]
+	if !ok || raw == nil {
+		return nil
+	}
+	var ids []string
+	switch val := raw.(type) {
+	case []string:
+		ids = val
+	case string:
+		ids = strings.Split(val, ",")
+	case []byte:
+		ids = strings.Split(string(val), ",")
+	default:
+		return nil
+	}
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			set[id] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
 func disallowFreeAuthFromMetadata(meta map[string]any) bool {
 	if len(meta) == 0 {
 		return false

@@ -12,6 +12,8 @@ import (
 
 type pinnedAuthContextKey struct{}
 
+type allowedAuthIDsContextKey struct{}
+
 type selectedAuthCallbackContextKey struct{}
 
 type preparedModelRouteContextKey struct{}
@@ -75,6 +77,26 @@ func WithPinnedAuthID(ctx context.Context, authID string) context.Context {
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, pinnedAuthContextKey{}, authID)
+}
+
+// WithAllowedAuthIDs returns a child context that restricts execution to the
+// given set of auth IDs. Unlike WithPinnedAuthID it does not force a single
+// credential; the scheduler still load-balances (round-robin / fill-first)
+// among the allowed auths. An empty set leaves the context unchanged.
+func WithAllowedAuthIDs(ctx context.Context, authIDs []string) context.Context {
+	cleaned := make([]string, 0, len(authIDs))
+	for _, id := range authIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			cleaned = append(cleaned, id)
+		}
+	}
+	if len(cleaned) == 0 {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, allowedAuthIDsContextKey{}, cleaned)
 }
 
 // WithSelectedAuthIDCallback returns a child context that receives the selected auth ID.
@@ -171,6 +193,16 @@ func pinnedAuthIDFromContext(ctx context.Context) string {
 	default:
 		return ""
 	}
+}
+
+func allowedAuthIDsFromContext(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	if v, ok := ctx.Value(allowedAuthIDsContextKey{}).([]string); ok {
+		return v
+	}
+	return nil
 }
 
 func selectedAuthIDCallbackFromContext(ctx context.Context) func(string) {

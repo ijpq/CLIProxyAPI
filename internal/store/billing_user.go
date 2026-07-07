@@ -23,19 +23,21 @@ type User struct {
 	DisplayName  string
 	Status       string
 	IsAdmin      bool
+	IsPrivileged bool
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
 
 // APIKeyRecord describes an api_keys row for portal listings (no plaintext).
 type APIKeyRecord struct {
-	ID         string
-	UserID     string
-	KeyPrefix  string
-	Name       string
-	LastUsedAt sql.NullTime
-	RevokedAt  sql.NullTime
-	CreatedAt  time.Time
+	ID           string
+	UserID       string
+	KeyPrefix    string
+	Name         string
+	BoundAuthIDs []string
+	LastUsedAt   sql.NullTime
+	RevokedAt    sql.NullTime
+	CreatedAt    time.Time
 }
 
 // UsageRecord mirrors a row in the usage_records table for portal listings.
@@ -52,6 +54,8 @@ type UsageRecord struct {
 	Cost             string
 	Status           string
 	ErrorMessage     string
+	AuthID           string
+	AuthLabel        string
 	CreatedAt        time.Time
 }
 
@@ -82,12 +86,12 @@ func (s *PostgresStore) CreateUser(ctx context.Context, email, passwordHash, dis
 	insertUser := fmt.Sprintf(`
 		INSERT INTO %s (email, password_hash, display_name)
 		VALUES ($1, $2, $3)
-		RETURNING id, email, password_hash, display_name, status, is_admin, created_at, updated_at
+		RETURNING id, email, password_hash, display_name, status, is_admin, is_privileged, created_at, updated_at
 	`, s.fullTableName(BillingUsersTable))
 
 	var u User
 	err = tx.QueryRowContext(ctx, insertUser, email, passwordHash, strings.TrimSpace(displayName)).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt,
+		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin, &u.IsPrivileged, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -124,13 +128,13 @@ func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (User,
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, email, password_hash, display_name, status, is_admin, created_at, updated_at
+		SELECT id, email, password_hash, display_name, status, is_admin, is_privileged, created_at, updated_at
 		FROM %s WHERE email = $1
 	`, s.fullTableName(BillingUsersTable))
 
 	var u User
 	err := s.db.QueryRowContext(ctx, query, email).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt,
+		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin, &u.IsPrivileged, &u.CreatedAt, &u.UpdatedAt,
 	)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -150,12 +154,12 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, id string) (User, error
 		return User{}, ErrUserNotFound
 	}
 	query := fmt.Sprintf(`
-		SELECT id, email, password_hash, display_name, status, is_admin, created_at, updated_at
+		SELECT id, email, password_hash, display_name, status, is_admin, is_privileged, created_at, updated_at
 		FROM %s WHERE id = $1
 	`, s.fullTableName(BillingUsersTable))
 	var u User
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt,
+		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin, &u.IsPrivileged, &u.CreatedAt, &u.UpdatedAt,
 	)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -168,7 +172,7 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, id string) (User, error
 
 // CreateAPIKey persists a new api_key row owned by userID. The hash and prefix
 // are computed by the caller so the plaintext key is never seen here.
-func (s *PostgresStore) CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string) (APIKeyRecord, error) {
+func (s *PostgresStore) CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string, boundAuthIDs []string) (APIKeyRecord, error) {
 	if s == nil || s.db == nil {
 		return APIKeyRecord{}, fmt.Errorf("postgres store: not initialized")
 	}
@@ -176,17 +180,19 @@ func (s *PostgresStore) CreateAPIKey(ctx context.Context, userID, keyHash, keyPr
 		return APIKeyRecord{}, fmt.Errorf("postgres store: user id and key hash required")
 	}
 	query := fmt.Sprintf(`
-		INSERT INTO %s (user_id, key_hash, key_prefix, name)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, user_id, key_prefix, name, last_used_at, revoked_at, created_at
+		INSERT INTO %s (user_id, key_hash, key_prefix, name, bound_auth_ids)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, user_id, key_prefix, name, bound_auth_ids, last_used_at, revoked_at, created_at
 	`, s.fullTableName(BillingAPIKeysTable))
 	var rec APIKeyRecord
-	err := s.db.QueryRowContext(ctx, query, userID, keyHash, keyPrefix, strings.TrimSpace(name)).Scan(
-		&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt,
+	var boundRaw string
+	err := s.db.QueryRowContext(ctx, query, userID, keyHash, keyPrefix, strings.TrimSpace(name), EncodeAuthIDs(boundAuthIDs)).Scan(
+		&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &boundRaw, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt,
 	)
 	if err != nil {
 		return APIKeyRecord{}, fmt.Errorf("postgres store: insert api key: %w", err)
 	}
+	rec.BoundAuthIDs = DecodeAuthIDs(boundRaw)
 	return rec, nil
 }
 
@@ -197,7 +203,7 @@ func (s *PostgresStore) ListAPIKeys(ctx context.Context, userID string) ([]APIKe
 		return nil, fmt.Errorf("postgres store: not initialized")
 	}
 	query := fmt.Sprintf(`
-		SELECT id, user_id, key_prefix, name, last_used_at, revoked_at, created_at
+		SELECT id, user_id, key_prefix, name, bound_auth_ids, last_used_at, revoked_at, created_at
 		FROM %s WHERE user_id = $1
 		ORDER BY created_at DESC
 	`, s.fullTableName(BillingAPIKeysTable))
@@ -209,9 +215,11 @@ func (s *PostgresStore) ListAPIKeys(ctx context.Context, userID string) ([]APIKe
 	out := make([]APIKeyRecord, 0, 8)
 	for rows.Next() {
 		var rec APIKeyRecord
-		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt); err != nil {
+		var boundRaw string
+		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &boundRaw, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt); err != nil {
 			return nil, fmt.Errorf("postgres store: scan api key: %w", err)
 		}
+		rec.BoundAuthIDs = DecodeAuthIDs(boundRaw)
 		out = append(out, rec)
 	}
 	if err := rows.Err(); err != nil {
@@ -284,7 +292,7 @@ func (s *PostgresStore) ListUsage(ctx context.Context, userID string, before tim
 	query := fmt.Sprintf(`
 		SELECT id, api_key_id, request_id, provider, model,
 		       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-		       cost::text, status, error_message, created_at
+		       cost::text, status, error_message, auth_id, auth_label, created_at
 		FROM %s
 		WHERE user_id = $1%s
 		ORDER BY created_at DESC
@@ -302,7 +310,7 @@ func (s *PostgresStore) ListUsage(ctx context.Context, userID string, before tim
 		if err := rows.Scan(
 			&rec.ID, &rec.APIKeyID, &rec.RequestID, &rec.Provider, &rec.Model,
 			&rec.InputTokens, &rec.OutputTokens, &rec.CacheReadTokens, &rec.CacheWriteTokens,
-			&rec.Cost, &rec.Status, &rec.ErrorMessage, &rec.CreatedAt,
+			&rec.Cost, &rec.Status, &rec.ErrorMessage, &rec.AuthID, &rec.AuthLabel, &rec.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("postgres store: scan usage: %w", err)
 		}
@@ -365,6 +373,58 @@ func (s *PostgresStore) PromoteUserToAdmin(ctx context.Context, email string) er
 	}
 	if n == 0 {
 		return ErrUserNotFound
+	}
+	return nil
+}
+
+// SetUserPrivileged sets the is_privileged flag for the user with the given id.
+// Returns ErrUserNotFound when no row matches.
+func (s *PostgresStore) SetUserPrivileged(ctx context.Context, userID string, privileged bool) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("postgres store: not initialized")
+	}
+	if strings.TrimSpace(userID) == "" {
+		return ErrUserNotFound
+	}
+	query := fmt.Sprintf(
+		"UPDATE %s SET is_privileged = $2, updated_at = NOW() WHERE id = $1",
+		s.fullTableName(BillingUsersTable),
+	)
+	res, err := s.db.ExecContext(ctx, query, userID, privileged)
+	if err != nil {
+		return fmt.Errorf("postgres store: set privileged: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("postgres store: set privileged rows: %w", err)
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// SetAPIKeyBoundAuths replaces the bound upstream account IDs for a key owned
+// by userID. Returns ErrAPIKeyNotFound when the active key does not belong to
+// the user.
+func (s *PostgresStore) SetAPIKeyBoundAuths(ctx context.Context, userID, keyID string, boundAuthIDs []string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("postgres store: not initialized")
+	}
+	query := fmt.Sprintf(
+		"UPDATE %s SET bound_auth_ids = $3 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+		s.fullTableName(BillingAPIKeysTable),
+	)
+	res, err := s.db.ExecContext(ctx, query, keyID, userID, EncodeAuthIDs(boundAuthIDs))
+	if err != nil {
+		return fmt.Errorf("postgres store: set bound auths: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("postgres store: set bound auths rows: %w", err)
+	}
+	if n == 0 {
+		return ErrAPIKeyNotFound
 	}
 	return nil
 }
