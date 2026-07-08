@@ -25,10 +25,11 @@ type Store interface {
 	CreateUser(ctx context.Context, email, passwordHash, displayName string) (store.User, error)
 	GetUserByEmail(ctx context.Context, email string) (store.User, error)
 	GetUserByID(ctx context.Context, id string) (store.User, error)
-	CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string, boundAuthIDs []string) (store.APIKeyRecord, error)
+	CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string, boundAuthIDs []string, unbilled bool) (store.APIKeyRecord, error)
 	ListAPIKeys(ctx context.Context, userID string) ([]store.APIKeyRecord, error)
 	RevokeAPIKey(ctx context.Context, userID, keyID string) error
 	SetAPIKeyBoundAuths(ctx context.Context, userID, keyID string, boundAuthIDs []string) error
+	SetAPIKeyUnbilled(ctx context.Context, userID, keyID string, unbilled bool) error
 	GetWalletBalance(ctx context.Context, userID string) (string, error)
 	ListUsage(ctx context.Context, userID string, before time.Time, limit int) ([]store.UsageRecord, error)
 
@@ -110,6 +111,7 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.POST("/api-keys", m.handleCreateKey)
 	authed.DELETE("/api-keys/:id", m.handleRevokeKey)
 	authed.PUT("/api-keys/:id/accounts", m.handleBindKeyAccounts)
+	authed.PUT("/api-keys/:id/unbilled", m.handleSetKeyUnbilled)
 	// Upstream accounts available for binding (privileged users only).
 	authed.GET("/accounts", m.handleListAccounts)
 

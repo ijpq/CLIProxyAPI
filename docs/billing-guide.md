@@ -21,7 +21,7 @@ BILLING_MARKUP=1.20                       # 在上游成本上加价 20%
 BILLING_RATE_PER_SEC=5                    # 每用户每秒请求数（0=不限）
 BILLING_RATE_BURST=20                     # 突发上限
 BILLING_BALANCE_THRESHOLD=0               # 余额 ≤ 此值拒绝请求
-BILLING_PRIVILEGED_BYPASS_RATE_LIMIT=false # 特权账号是否也豁免限流（默认 false：特权仅豁免余额，仍受限流）
+BILLING_UNBILLED_BYPASS_RATE_LIMIT=false  # 免余额(unbilled)的 Key 是否也豁免限流（默认 false：仅豁免余额，仍受限流）
 
 # ===== USDT 充值 =====
 BILLING_USDT_TRC20=T...你的TRC20钱包地址
@@ -261,38 +261,53 @@ USDT 充值在链上自动确认，无需手动操作。
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /accounts | 列出可绑定的上游账号（id/provider/label/status） |
-| PUT | /api-keys/:id/accounts | 重新绑定某 Key 的上游账号 `{bound_auth_ids: []}` |
+| PUT | /api-keys/:id/accounts | 改绑某 Key 的上游账号 `{bound_auth_ids: []}`（空=解绑） |
+| PUT | /api-keys/:id/unbilled | 切换某 Key 是否免余额 `{unbilled: bool}` |
 
 ---
 
-## 五、特权账号（Privileged）
+## 五、特权与 Key 的两种独立能力
 
-特权账号用于内部/自用场景：**不受余额限制**，且其 API Key 可**绑定具体的上游账号（额度来源）**。
+设计上把两件**互相独立**的事拆开了：
 
-### 5.1 授予特权
+- **`is_privileged`（用户级）** = **能力开关**：只决定"谁被**允许**创建带下面两种特殊属性的 Key"。它本身不影响计费、不影响路由。
+- **`bound_auth_ids`（Key 级）** = **账号绑定 / 路由限制**：这个 Key 只能走指定的上游账号。
+- **`unbilled`（Key 级）** = **免余额 / 不计费**：这个 Key 跳过余额检查、用量仍记录但不扣钱包。
 
-管理员在「管理」页的用户列表点击「设为特权」（或调用 `POST /admin/users/:id/privileged {"privileged":true}`）。特权是用户级的，该用户名下所有 Key 都生效。
+两个 Key 级属性**任意组合**，互不牵连。所以同一个特权用户可以同时拥有：
 
-### 5.2 余额与限流
+| 场景 | bound_auth_ids | unbilled |
+|---|---|---|
+| 普通付费 | 空 | 否 |
+| 付费但只走指定账号（成本隔离） | 有 | 否 |
+| 内部免费、只走某账号 | 有 | 是 |
+| 内部免费、不限账号 | 空 | 是 |
 
-- **余额**：特权账号跳过余额检查（`BILLING_BALANCE_THRESHOLD` 对其无效）。用量仍会**记录**（含成本与所用上游账号），但**不从钱包扣款**，因此账单/日志可审计但不计费。
-- **限流**：默认仍受 `BILLING_RATE_PER_SEC/BURST` 限制。若要特权账号也豁免限流，设置 `BILLING_PRIVILEGED_BYPASS_RATE_LIMIT=true`。
+### 5.1 授予特权（能力开关）
 
-### 5.3 绑定上游账号
+管理员在「管理」页用户列表点「设为特权」（或 `POST /admin/users/:id/privileged {"privileged":true}`）。之后该用户建 Key 时才能勾选下面两项；非特权用户传 `bound_auth_ids`/`unbilled` 会被 403 拒绝。
 
-特权用户在「API Keys」页创建 Key 时，可在「绑定上游账号」多选框里选择一个或多个上游账号：
+### 5.2 账号绑定（bound_auth_ids）
 
-- **绑定 1 个**：该 Key 的所有请求固定走这个账号。
-- **绑定多个**：请求只在这些账号中选择，并按 CLIProxy 自身的调度策略（轮询 / fill-first）负载均衡。
-- **不绑定**：走全部可用账号（与普通用户一致）。
+建 Key 时在「绑定上游账号」多选框选择（或 API 传 `bound_auth_ids`）：
 
-只有特权用户能绑定；普通用户传 `bound_auth_ids` 会被拒绝。绑定的账号 ID 来自 `GET /accounts`。
+- **绑 1 个**：固定走它；
+- **绑多个**：只在这些账号里，按 CLIProxy 自身的**轮询 / fill-first** 调度；
+- **不绑**：走全部账号。
 
-> 注意：绑定的上游账号必须能服务所请求的模型（例如绑定一个 Gemini 账号却请求 OpenAI 模型会失败）。请自行确保「模型 + 账号」匹配。
+账号 ID 来自 `GET /accounts`——注意 **ID 就是 `auths/` 下的凭证文件名**（如 `gemini-user@x.com.json`）。因此：**改名/删除/换文件名会让绑定失效**（该 Key 请求会因"无可用账号"而失败）。改绑用 `PUT /api-keys/:id/accounts`。
+
+> 绑定限制的是**账号**，不是模型：绑定的账号得能服务你请求的模型（绑 Gemini 账号却请求 GPT 会失败）。
+
+### 5.3 免余额（unbilled）
+
+建 Key 时勾「免余额」（或 API 传 `unbilled:true`，或事后 `PUT /api-keys/:id/unbilled`）。该 Key：跳过 `BILLING_BALANCE_THRESHOLD` 余额检查、用量**仍记录**（含成本与所用账号）但**不扣钱包**；默认仍受限流，除非 `BILLING_UNBILLED_BYPASS_RATE_LIMIT=true`。
+
+> 注意：`unbilled` 是 Key 级属性。取消用户特权**不会**自动改动其已创建的 unbilled Key（要停就吊销那些 Key，或 `PUT /api-keys/:id/unbilled {"unbilled":false}`）。
 
 ### 5.4 审计日志
 
-每条请求的用量记录都会写入实际服务它的上游账号（`auth_id` / `auth_label`），在「用量明细」页的「账号」列可见；特权请求还会打印一条结构化日志 `billing: privileged request served (unbilled)`，含用户、账号、provider、model。由此可追溯**哪个特权账号用了哪个上游账号的额度**。
+每条用量记录都写入实际服务它的上游账号（`auth_id`/`auth_label`），在「用量明细」的「账号」列可见；unbilled 请求还会打一条 `billing: unbilled request served`（含用户/账号/provider/model）。→ 谁用了哪个账号的额度可追溯。
 
 ---
 

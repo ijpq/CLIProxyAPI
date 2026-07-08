@@ -74,20 +74,18 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 
 	rate, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_RATE_PER_SEC")), 64)
 	burst, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_RATE_BURST")), 64)
-	bypassRateLimit, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("BILLING_PRIVILEGED_BYPASS_RATE_LIMIT")))
+	bypassRateLimit, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("BILLING_UNBILLED_BYPASS_RATE_LIMIT")))
 	rateLimiter := billing.NewRateLimiter(rate, burst, bypassRateLimit)
 
 	api.RegisterPostAuthHandler(rateLimiter.Handler())
 	api.RegisterPostAuthHandler(balanceGuard.Handler())
-	// Bind privileged keys to their upstream accounts: narrow candidate
-	// selection to the bound set so CPA's own scheduler (round-robin /
-	// fill-first) load-balances within it. A single bound account behaves like
-	// a pin; an empty binding leaves normal scheduling untouched.
+	// Honor a key's account binding: narrow candidate selection to the bound
+	// set so CPA's own scheduler (round-robin / fill-first) load-balances
+	// within it. A single bound account behaves like a pin; an empty binding
+	// leaves normal scheduling untouched. Independent of billing (the binding
+	// is only ever set by a privileged user at key creation).
 	api.RegisterPostAuthHandler(func(c *gin.Context) {
 		reqCtx := c.Request.Context()
-		if !billing.PrivilegedFromContext(reqCtx) {
-			return
-		}
 		bound := billing.BoundAuthIDsFromContext(reqCtx)
 		if len(bound) == 0 {
 			return
