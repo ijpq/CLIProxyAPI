@@ -14,9 +14,9 @@ import "context"
 const (
 	MetadataKeyUserID   = "billing_user_id"
 	MetadataKeyAPIKeyID = "billing_api_key_id"
-	// MetadataKeyPrivileged is "1" when the owning user has the privileged
-	// flag, so the request may pin upstream accounts and bypass balance limits.
-	MetadataKeyPrivileged = "billing_privileged"
+	// MetadataKeyUnbilled is "1" when the authenticating API key is exempt from
+	// wallet balance/debit. It is a per-key property, independent of binding.
+	MetadataKeyUnbilled = "billing_unbilled"
 	// MetadataKeyBoundAuthIDs carries the comma-separated upstream account IDs
 	// bound to the authenticating API key.
 	MetadataKeyBoundAuthIDs = "billing_bound_auth_ids"
@@ -27,7 +27,7 @@ type contextKey int
 const (
 	ctxUserID contextKey = iota + 1
 	ctxAPIKeyID
-	ctxPrivileged
+	ctxUnbilled
 	ctxBoundAuthIDs
 )
 
@@ -65,18 +65,19 @@ func APIKeyIDFromContext(ctx context.Context) string {
 	return v
 }
 
-// WithPrivileged marks the context as belonging to a privileged user.
-func WithPrivileged(ctx context.Context) context.Context {
-	return context.WithValue(ctx, ctxPrivileged, true)
+// WithUnbilled marks the context as belonging to an unbilled API key (exempt
+// from wallet balance/debit).
+func WithUnbilled(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxUnbilled, true)
 }
 
-// PrivilegedFromContext reports whether the request was authenticated as a
-// privileged user.
-func PrivilegedFromContext(ctx context.Context) bool {
+// UnbilledFromContext reports whether the request was authenticated with an
+// unbilled API key.
+func UnbilledFromContext(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
-	v, _ := ctx.Value(ctxPrivileged).(bool)
+	v, _ := ctx.Value(ctxUnbilled).(bool)
 	return v
 }
 

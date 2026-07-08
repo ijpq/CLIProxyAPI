@@ -87,7 +87,7 @@ func (p *MeterPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 		}
 	}
 
-	privileged := PrivilegedFromContext(ctx)
+	unbilled := UnbilledFromContext(ctx)
 	authID := strings.TrimSpace(record.AuthID)
 	authLabel := ""
 	if authID != "" {
@@ -112,25 +112,25 @@ func (p *MeterPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 		ErrorMessage:     errMsg,
 		AuthID:           authID,
 		AuthLabel:        authLabel,
-		SkipDebit:        privileged,
+		SkipDebit:        unbilled,
 	}); err != nil {
 		log.WithError(err).Errorf("billing: record usage for user %s failed", userID)
 		return
 	}
-	if privileged {
-		// Audit trail: which privileged user drew from which upstream account.
+	if unbilled {
+		// Audit trail: which user/key drew from which upstream account.
 		log.WithFields(log.Fields{
 			"user":     userID,
 			"account":  authID,
 			"label":    authLabel,
 			"provider": record.Provider,
 			"model":    record.Model,
-		}).Info("billing: privileged request served (unbilled)")
+		}).Info("billing: unbilled request served")
 	}
 	if p.invalidator != nil {
 		p.invalidator(userID)
 	}
-	if !privileged && p.notifier != nil && p.balanceReader != nil {
+	if !unbilled && p.notifier != nil && p.balanceReader != nil {
 		if raw, err := p.balanceReader.GetWalletBalance(bgCtx, userID); err == nil {
 			if bal, _ := strconv.ParseFloat(strings.TrimSpace(raw), 64); bal <= p.lowBalanceThresh && bal > p.lowBalanceThresh-cost*2 {
 				p.notifier.Send(bgCtx, fmt.Sprintf("⚠️ 用户 %s 余额不足: %.2f", userID, bal))
