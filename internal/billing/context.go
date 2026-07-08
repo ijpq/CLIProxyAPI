@@ -1,25 +1,28 @@
 // Package billing carries cross-package primitives shared by the paid-tier
 // modules: API key lookup metadata keys for the access layer, request-context
-// helpers so handlers can attribute usage to a user, and similar small
-// building blocks. Heavier components (pricing tables, metering hooks, wallet
-// transactions) live in dedicated files alongside this one as they are
-// implemented.
+// helpers so handlers can attribute usage to a user and enforce per-user access
+// controls, and similar small building blocks. Heavier components (pricing
+// tables, metering hooks, wallet transactions) live in dedicated files
+// alongside this one.
 package billing
 
 import "context"
 
 // Metadata keys placed on access.Result.Metadata by the DB-backed API key
-// provider. Downstream metering code reads these to attribute usage and cost
-// to the owning user and API key.
+// provider. Downstream code reads these to attribute usage and enforce the
+// per-user access controls set by the super admin.
 const (
 	MetadataKeyUserID   = "billing_user_id"
 	MetadataKeyAPIKeyID = "billing_api_key_id"
-	// MetadataKeyUnbilled is "1" when the authenticating API key is exempt from
-	// wallet balance/debit. It is a per-key property, independent of binding.
+	// MetadataKeyUnbilled is "1" when the owning user is exempt from wallet
+	// balance/debit.
 	MetadataKeyUnbilled = "billing_unbilled"
-	// MetadataKeyBoundAuthIDs carries the comma-separated upstream account IDs
-	// bound to the authenticating API key.
-	MetadataKeyBoundAuthIDs = "billing_bound_auth_ids"
+	// MetadataKeyAllowedAuthIDs carries the comma-separated upstream account
+	// IDs the user is restricted to (empty/absent = all).
+	MetadataKeyAllowedAuthIDs = "billing_allowed_auth_ids"
+	// MetadataKeyAllowedModels carries the comma-separated client-visible model
+	// names the user is restricted to (empty/absent = all).
+	MetadataKeyAllowedModels = "billing_allowed_models"
 )
 
 type contextKey int
@@ -28,7 +31,8 @@ const (
 	ctxUserID contextKey = iota + 1
 	ctxAPIKeyID
 	ctxUnbilled
-	ctxBoundAuthIDs
+	ctxAllowedAuthIDs
+	ctxAllowedModels
 )
 
 // WithUserID returns a derived context carrying the authenticated user id.
@@ -65,14 +69,14 @@ func APIKeyIDFromContext(ctx context.Context) string {
 	return v
 }
 
-// WithUnbilled marks the context as belonging to an unbilled API key (exempt
-// from wallet balance/debit).
+// WithUnbilled marks the context as belonging to an unbilled user (exempt from
+// wallet balance/debit).
 func WithUnbilled(ctx context.Context) context.Context {
 	return context.WithValue(ctx, ctxUnbilled, true)
 }
 
-// UnbilledFromContext reports whether the request was authenticated with an
-// unbilled API key.
+// UnbilledFromContext reports whether the request was authenticated by an
+// unbilled user.
 func UnbilledFromContext(ctx context.Context) bool {
 	if ctx == nil {
 		return false
@@ -81,20 +85,38 @@ func UnbilledFromContext(ctx context.Context) bool {
 	return v
 }
 
-// WithBoundAuthIDs attaches the upstream account IDs bound to the caller's API
-// key. An empty slice leaves the context unchanged.
-func WithBoundAuthIDs(ctx context.Context, ids []string) context.Context {
+// WithAllowedAuthIDs attaches the upstream account IDs the user is restricted
+// to. An empty slice leaves the context unchanged.
+func WithAllowedAuthIDs(ctx context.Context, ids []string) context.Context {
 	if len(ids) == 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, ctxBoundAuthIDs, ids)
+	return context.WithValue(ctx, ctxAllowedAuthIDs, ids)
 }
 
-// BoundAuthIDsFromContext returns the bound upstream account IDs, or nil.
-func BoundAuthIDsFromContext(ctx context.Context) []string {
+// AllowedAuthIDsFromContext returns the allowed upstream account IDs, or nil.
+func AllowedAuthIDsFromContext(ctx context.Context) []string {
 	if ctx == nil {
 		return nil
 	}
-	v, _ := ctx.Value(ctxBoundAuthIDs).([]string)
+	v, _ := ctx.Value(ctxAllowedAuthIDs).([]string)
+	return v
+}
+
+// WithAllowedModels attaches the client-visible model names the user is
+// restricted to. An empty slice leaves the context unchanged.
+func WithAllowedModels(ctx context.Context, models []string) context.Context {
+	if len(models) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxAllowedModels, models)
+}
+
+// AllowedModelsFromContext returns the allowed model names, or nil.
+func AllowedModelsFromContext(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	v, _ := ctx.Value(ctxAllowedModels).([]string)
 	return v
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/modules/portal"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
 	sdkhandlers "github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
@@ -79,20 +80,42 @@ func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOpti
 
 	api.RegisterPostAuthHandler(rateLimiter.Handler())
 	api.RegisterPostAuthHandler(balanceGuard.Handler())
-	// Honor a key's account binding: narrow candidate selection to the bound
-	// set so CPA's own scheduler (round-robin / fill-first) load-balances
-	// within it. A single bound account behaves like a pin; an empty binding
-	// leaves normal scheduling untouched. Independent of billing (the binding
-	// is only ever set by a privileged user at key creation).
+	// Per-user account restriction (set by the super admin): narrow candidate
+	// selection to the allowed set so CPA's own scheduler (round-robin /
+	// fill-first) load-balances within it. A single allowed account behaves
+	// like a pin; an empty set leaves normal scheduling untouched.
 	api.RegisterPostAuthHandler(func(c *gin.Context) {
 		reqCtx := c.Request.Context()
-		bound := billing.BoundAuthIDsFromContext(reqCtx)
-		if len(bound) == 0 {
+		allowed := billing.AllowedAuthIDsFromContext(reqCtx)
+		if len(allowed) == 0 {
 			return
 		}
-		c.Request = c.Request.WithContext(sdkhandlers.WithAllowedAuthIDs(reqCtx, bound))
+		c.Request = c.Request.WithContext(sdkhandlers.WithAllowedAuthIDs(reqCtx, allowed))
 	})
+	// Per-user model restriction (set by the super admin): 403 a request whose
+	// target model is not on the user's allowed list.
+	api.RegisterPostAuthHandler(billing.ModelAccessGuard())
 	go sweepRateLimiter(rateLimiter)
+
+	// Expose the full client-visible model list to the portal (admin's per-user
+	// model whitelist picker) via a lazy lister over the global model registry.
+	billing.SetModelLister(func() []string {
+		entries := registry.GetGlobalRegistry().GetAvailableModels("openai")
+		out := make([]string, 0, len(entries))
+		seen := make(map[string]struct{}, len(entries))
+		for _, e := range entries {
+			id, _ := e["id"].(string)
+			if id = strings.TrimSpace(id); id == "" {
+				continue
+			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+		return out
+	})
 
 	meter := billing.NewMeterPlugin(pg, pricing)
 	meter.SetInvalidator(balanceGuard.Invalidate)
