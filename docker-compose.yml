@@ -1,6 +1,10 @@
 services:
   cli-proxy-api:
     image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}
+    # Pull the published image on `docker compose up` (path A). To build from
+    # source instead (path B, no Docker Hub needed), run `up --build`, which
+    # overrides this.
+    pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile
