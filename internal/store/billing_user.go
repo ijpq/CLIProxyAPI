@@ -23,22 +23,23 @@ type User struct {
 	DisplayName  string
 	Status       string
 	IsAdmin      bool
-	IsPrivileged bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Per-user access controls, set only by the super admin.
+	Unbilled       bool     // exempt from wallet balance check + debit
+	AllowedModels  []string // restrict to these client-visible models (empty = all)
+	AllowedAuthIDs []string // restrict to these upstream accounts (empty = all)
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // APIKeyRecord describes an api_keys row for portal listings (no plaintext).
 type APIKeyRecord struct {
-	ID           string
-	UserID       string
-	KeyPrefix    string
-	Name         string
-	BoundAuthIDs []string
-	Unbilled     bool
-	LastUsedAt   sql.NullTime
-	RevokedAt    sql.NullTime
-	CreatedAt    time.Time
+	ID         string
+	UserID     string
+	KeyPrefix  string
+	Name       string
+	LastUsedAt sql.NullTime
+	RevokedAt  sql.NullTime
+	CreatedAt  time.Time
 }
 
 // UsageRecord mirrors a row in the usage_records table for portal listings.
@@ -58,6 +59,30 @@ type UsageRecord struct {
 	AuthID           string
 	AuthLabel        string
 	CreatedAt        time.Time
+}
+
+// rowScanner is satisfied by both *sql.Row and *sql.Rows so scanUser can serve
+// single-row and multi-row queries.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// userSelectColumns is the canonical column list for loading a User; kept in
+// sync with scanUser so every user query decodes the same shape.
+const userSelectColumns = "id, email, password_hash, display_name, status, is_admin, unbilled, allowed_models, allowed_auth_ids, created_at, updated_at"
+
+func scanUser(row rowScanner) (User, error) {
+	var u User
+	var modelsRaw, authRaw string
+	if err := row.Scan(
+		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin,
+		&u.Unbilled, &modelsRaw, &authRaw, &u.CreatedAt, &u.UpdatedAt,
+	); err != nil {
+		return User{}, err
+	}
+	u.AllowedModels = DecodeAuthIDs(modelsRaw)
+	u.AllowedAuthIDs = DecodeAuthIDs(authRaw)
+	return u, nil
 }
 
 // CreateUser inserts a new user and a zero-balance wallet in a single
@@ -87,13 +112,11 @@ func (s *PostgresStore) CreateUser(ctx context.Context, email, passwordHash, dis
 	insertUser := fmt.Sprintf(`
 		INSERT INTO %s (email, password_hash, display_name)
 		VALUES ($1, $2, $3)
-		RETURNING id, email, password_hash, display_name, status, is_admin, is_privileged, created_at, updated_at
-	`, s.fullTableName(BillingUsersTable))
+		RETURNING %s
+	`, s.fullTableName(BillingUsersTable), userSelectColumns)
 
 	var u User
-	err = tx.QueryRowContext(ctx, insertUser, email, passwordHash, strings.TrimSpace(displayName)).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin, &u.IsPrivileged, &u.CreatedAt, &u.UpdatedAt,
-	)
+	u, err = scanUser(tx.QueryRowContext(ctx, insertUser, email, passwordHash, strings.TrimSpace(displayName)))
 	if err != nil {
 		if isUniqueViolation(err) {
 			err = ErrEmailTaken
@@ -128,15 +151,8 @@ func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (User,
 		return User{}, ErrUserNotFound
 	}
 
-	query := fmt.Sprintf(`
-		SELECT id, email, password_hash, display_name, status, is_admin, is_privileged, created_at, updated_at
-		FROM %s WHERE email = $1
-	`, s.fullTableName(BillingUsersTable))
-
-	var u User
-	err := s.db.QueryRowContext(ctx, query, email).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin, &u.IsPrivileged, &u.CreatedAt, &u.UpdatedAt,
-	)
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE email = $1", userSelectColumns, s.fullTableName(BillingUsersTable))
+	u, err := scanUser(s.db.QueryRowContext(ctx, query, email))
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return User{}, ErrUserNotFound
@@ -154,14 +170,8 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, id string) (User, error
 	if strings.TrimSpace(id) == "" {
 		return User{}, ErrUserNotFound
 	}
-	query := fmt.Sprintf(`
-		SELECT id, email, password_hash, display_name, status, is_admin, is_privileged, created_at, updated_at
-		FROM %s WHERE id = $1
-	`, s.fullTableName(BillingUsersTable))
-	var u User
-	err := s.db.QueryRowContext(ctx, query, id).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin, &u.IsPrivileged, &u.CreatedAt, &u.UpdatedAt,
-	)
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", userSelectColumns, s.fullTableName(BillingUsersTable))
+	u, err := scanUser(s.db.QueryRowContext(ctx, query, id))
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return User{}, ErrUserNotFound
@@ -172,8 +182,9 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, id string) (User, error
 }
 
 // CreateAPIKey persists a new api_key row owned by userID. The hash and prefix
-// are computed by the caller so the plaintext key is never seen here.
-func (s *PostgresStore) CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string, boundAuthIDs []string, unbilled bool) (APIKeyRecord, error) {
+// are computed by the caller so the plaintext key is never seen here. Per-user
+// access controls live on the users table, so keys carry no per-key policy.
+func (s *PostgresStore) CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string) (APIKeyRecord, error) {
 	if s == nil || s.db == nil {
 		return APIKeyRecord{}, fmt.Errorf("postgres store: not initialized")
 	}
@@ -181,19 +192,17 @@ func (s *PostgresStore) CreateAPIKey(ctx context.Context, userID, keyHash, keyPr
 		return APIKeyRecord{}, fmt.Errorf("postgres store: user id and key hash required")
 	}
 	query := fmt.Sprintf(`
-		INSERT INTO %s (user_id, key_hash, key_prefix, name, bound_auth_ids, unbilled)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, user_id, key_prefix, name, bound_auth_ids, unbilled, last_used_at, revoked_at, created_at
+		INSERT INTO %s (user_id, key_hash, key_prefix, name)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, user_id, key_prefix, name, last_used_at, revoked_at, created_at
 	`, s.fullTableName(BillingAPIKeysTable))
 	var rec APIKeyRecord
-	var boundRaw string
-	err := s.db.QueryRowContext(ctx, query, userID, keyHash, keyPrefix, strings.TrimSpace(name), EncodeAuthIDs(boundAuthIDs), unbilled).Scan(
-		&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &boundRaw, &rec.Unbilled, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt,
+	err := s.db.QueryRowContext(ctx, query, userID, keyHash, keyPrefix, strings.TrimSpace(name)).Scan(
+		&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt,
 	)
 	if err != nil {
 		return APIKeyRecord{}, fmt.Errorf("postgres store: insert api key: %w", err)
 	}
-	rec.BoundAuthIDs = DecodeAuthIDs(boundRaw)
 	return rec, nil
 }
 
@@ -204,7 +213,7 @@ func (s *PostgresStore) ListAPIKeys(ctx context.Context, userID string) ([]APIKe
 		return nil, fmt.Errorf("postgres store: not initialized")
 	}
 	query := fmt.Sprintf(`
-		SELECT id, user_id, key_prefix, name, bound_auth_ids, unbilled, last_used_at, revoked_at, created_at
+		SELECT id, user_id, key_prefix, name, last_used_at, revoked_at, created_at
 		FROM %s WHERE user_id = $1
 		ORDER BY created_at DESC
 	`, s.fullTableName(BillingAPIKeysTable))
@@ -216,11 +225,9 @@ func (s *PostgresStore) ListAPIKeys(ctx context.Context, userID string) ([]APIKe
 	out := make([]APIKeyRecord, 0, 8)
 	for rows.Next() {
 		var rec APIKeyRecord
-		var boundRaw string
-		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &boundRaw, &rec.Unbilled, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt); err != nil {
 			return nil, fmt.Errorf("postgres store: scan api key: %w", err)
 		}
-		rec.BoundAuthIDs = DecodeAuthIDs(boundRaw)
 		out = append(out, rec)
 	}
 	if err := rows.Err(); err != nil {
@@ -378,9 +385,10 @@ func (s *PostgresStore) PromoteUserToAdmin(ctx context.Context, email string) er
 	return nil
 }
 
-// SetUserPrivileged sets the is_privileged flag for the user with the given id.
-// Returns ErrUserNotFound when no row matches.
-func (s *PostgresStore) SetUserPrivileged(ctx context.Context, userID string, privileged bool) error {
+// SetUserLimits replaces the per-user access controls (unbilled + allowed
+// models + allowed upstream accounts) for the given user. Empty slices clear
+// the corresponding restriction. Returns ErrUserNotFound when no row matches.
+func (s *PostgresStore) SetUserLimits(ctx context.Context, userID string, unbilled bool, allowedModels, allowedAuthIDs []string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("postgres store: not initialized")
 	}
@@ -388,69 +396,19 @@ func (s *PostgresStore) SetUserPrivileged(ctx context.Context, userID string, pr
 		return ErrUserNotFound
 	}
 	query := fmt.Sprintf(
-		"UPDATE %s SET is_privileged = $2, updated_at = NOW() WHERE id = $1",
+		"UPDATE %s SET unbilled = $2, allowed_models = $3, allowed_auth_ids = $4, updated_at = NOW() WHERE id = $1",
 		s.fullTableName(BillingUsersTable),
 	)
-	res, err := s.db.ExecContext(ctx, query, userID, privileged)
+	res, err := s.db.ExecContext(ctx, query, userID, unbilled, EncodeAuthIDs(allowedModels), EncodeAuthIDs(allowedAuthIDs))
 	if err != nil {
-		return fmt.Errorf("postgres store: set privileged: %w", err)
+		return fmt.Errorf("postgres store: set user limits: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("postgres store: set privileged rows: %w", err)
+		return fmt.Errorf("postgres store: set user limits rows: %w", err)
 	}
 	if n == 0 {
 		return ErrUserNotFound
-	}
-	return nil
-}
-
-// SetAPIKeyBoundAuths replaces the bound upstream account IDs for a key owned
-// by userID. Returns ErrAPIKeyNotFound when the active key does not belong to
-// the user.
-func (s *PostgresStore) SetAPIKeyBoundAuths(ctx context.Context, userID, keyID string, boundAuthIDs []string) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("postgres store: not initialized")
-	}
-	query := fmt.Sprintf(
-		"UPDATE %s SET bound_auth_ids = $3 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
-		s.fullTableName(BillingAPIKeysTable),
-	)
-	res, err := s.db.ExecContext(ctx, query, keyID, userID, EncodeAuthIDs(boundAuthIDs))
-	if err != nil {
-		return fmt.Errorf("postgres store: set bound auths: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("postgres store: set bound auths rows: %w", err)
-	}
-	if n == 0 {
-		return ErrAPIKeyNotFound
-	}
-	return nil
-}
-
-// SetAPIKeyUnbilled toggles the wallet-exemption flag for a key owned by
-// userID. Returns ErrAPIKeyNotFound when the active key does not belong to the
-// user.
-func (s *PostgresStore) SetAPIKeyUnbilled(ctx context.Context, userID, keyID string, unbilled bool) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("postgres store: not initialized")
-	}
-	query := fmt.Sprintf(
-		"UPDATE %s SET unbilled = $3 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
-		s.fullTableName(BillingAPIKeysTable),
-	)
-	res, err := s.db.ExecContext(ctx, query, keyID, userID, unbilled)
-	if err != nil {
-		return fmt.Errorf("postgres store: set unbilled: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("postgres store: set unbilled rows: %w", err)
-	}
-	if n == 0 {
-		return ErrAPIKeyNotFound
 	}
 	return nil
 }

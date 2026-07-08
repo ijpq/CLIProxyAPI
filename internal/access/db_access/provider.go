@@ -93,8 +93,11 @@ func (p *provider) Authenticate(ctx context.Context, r *http.Request) (*sdkacces
 	if lookup.Unbilled {
 		meta[billing.MetadataKeyUnbilled] = "1"
 	}
-	if len(lookup.BoundAuthIDs) > 0 {
-		meta[billing.MetadataKeyBoundAuthIDs] = store.EncodeAuthIDs(lookup.BoundAuthIDs)
+	if len(lookup.AllowedAuthIDs) > 0 {
+		meta[billing.MetadataKeyAllowedAuthIDs] = store.EncodeAuthIDs(lookup.AllowedAuthIDs)
+	}
+	if len(lookup.AllowedModels) > 0 {
+		meta[billing.MetadataKeyAllowedModels] = store.EncodeAuthIDs(lookup.AllowedModels)
 	}
 
 	return &sdkaccess.Result{

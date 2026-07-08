@@ -15,13 +15,11 @@ import (
 type APIKeyLookup struct {
 	ID     string
 	UserID string
-	// Unbilled marks the key as exempt from wallet balance/debit: usage is
-	// still recorded for audit but the wallet is not touched. Independent of
-	// BoundAuthIDs.
-	Unbilled bool
-	// BoundAuthIDs restricts this key's requests to a set of upstream account
-	// IDs. Empty means no restriction (normal scheduler behavior).
-	BoundAuthIDs []string
+	// Per-user access controls (from the users table), applied to every key
+	// the user owns. Set only by the super admin.
+	Unbilled       bool     // exempt from wallet balance check + debit
+	AllowedModels  []string // restrict to these client-visible models (empty = all)
+	AllowedAuthIDs []string // restrict to these upstream accounts (empty = all)
 }
 
 // EncodeAuthIDs joins upstream auth IDs into the comma-separated form stored in
@@ -77,19 +75,22 @@ func (s *PostgresStore) LookupAPIKey(ctx context.Context, keyHash string) (APIKe
 	}
 
 	query := fmt.Sprintf(
-		`SELECT id, user_id, unbilled, bound_auth_ids FROM %s WHERE key_hash = $1 AND revoked_at IS NULL`,
-		s.fullTableName(BillingAPIKeysTable),
+		`SELECT k.id, k.user_id, u.unbilled, u.allowed_models, u.allowed_auth_ids
+		 FROM %s k JOIN %s u ON u.id = k.user_id
+		 WHERE k.key_hash = $1 AND k.revoked_at IS NULL`,
+		s.fullTableName(BillingAPIKeysTable), s.fullTableName(BillingUsersTable),
 	)
 	var out APIKeyLookup
-	var boundRaw string
-	err := s.db.QueryRowContext(ctx, query, keyHash).Scan(&out.ID, &out.UserID, &out.Unbilled, &boundRaw)
+	var modelsRaw, authRaw string
+	err := s.db.QueryRowContext(ctx, query, keyHash).Scan(&out.ID, &out.UserID, &out.Unbilled, &modelsRaw, &authRaw)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return APIKeyLookup{}, ErrAPIKeyNotFound
 	case err != nil:
 		return APIKeyLookup{}, fmt.Errorf("postgres store: lookup api key: %w", err)
 	}
-	out.BoundAuthIDs = DecodeAuthIDs(boundRaw)
+	out.AllowedModels = DecodeAuthIDs(modelsRaw)
+	out.AllowedAuthIDs = DecodeAuthIDs(authRaw)
 	return out, nil
 }
 

@@ -153,17 +153,18 @@ func billingSchemaStatements(s *PostgresStore) []string {
 		// reference data.
 		fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_active_method_amount ON %s(method, amount) WHERE status IN ('pending','submitted')`, s.fullTableName(BillingTopupOrdersTable)),
 
-		// Privileged / key-capability columns (added after the base schema
-		// shipped, so they use idempotent ALTERs to upgrade deployments in
-		// place). is_privileged is a user-level capability gate: only such
-		// users may create keys with the special properties below. The two
-		// key properties are independent: bound_auth_ids restricts a key to a
-		// set of upstream account IDs (routing), and unbilled exempts a key
-		// from wallet balance/debit (billing). auth_id/auth_label record which
-		// upstream account actually served each metered request.
-		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS is_privileged BOOLEAN NOT NULL DEFAULT FALSE`, users),
-		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS bound_auth_ids TEXT NOT NULL DEFAULT ''`, apiKeys),
-		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS unbilled BOOLEAN NOT NULL DEFAULT FALSE`, apiKeys),
+		// Per-user access controls, set ONLY by the super admin (is_admin). All
+		// three are independent and apply to every API key the user owns:
+		//   unbilled         - exempt from wallet balance check + debit.
+		//   allowed_models   - restrict to a set of client-visible model names
+		//                      (comma-separated; empty = all models).
+		//   allowed_auth_ids - restrict to a set of upstream accounts / auth
+		//                      files (comma-separated; empty = all accounts).
+		// auth_id/auth_label on usage_records record which upstream account
+		// actually served each metered request (audit).
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS unbilled BOOLEAN NOT NULL DEFAULT FALSE`, users),
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS allowed_models TEXT NOT NULL DEFAULT ''`, users),
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS allowed_auth_ids TEXT NOT NULL DEFAULT ''`, users),
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS auth_id TEXT NOT NULL DEFAULT ''`, usageRecords),
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS auth_label TEXT NOT NULL DEFAULT ''`, usageRecords),
 	}

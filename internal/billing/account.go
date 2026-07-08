@@ -15,10 +15,10 @@ type Account struct {
 	Status   string `json:"status"`
 }
 
-// SplitBoundAuthIDs splits the comma-separated bound-account metadata value
-// into a slice, dropping blanks. Lets callers that only depend on the billing
-// package decode MetadataKeyBoundAuthIDs without importing the store package.
-func SplitBoundAuthIDs(raw string) []string {
+// SplitCSV splits a comma-separated metadata value into a slice, dropping
+// blanks. Lets callers that only depend on the billing package decode the
+// allowed-accounts / allowed-models metadata without importing the store.
+func SplitCSV(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
@@ -108,6 +108,68 @@ func ValidAccountIDs(ids []string) []string {
 	for _, id := range cleaned {
 		if _, ok := valid[id]; ok {
 			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// ModelLister returns the currently available client-visible model names.
+type ModelLister func() []string
+
+var (
+	modelListerMu sync.RWMutex
+	modelLister   ModelLister
+)
+
+// SetModelLister registers the function used to enumerate all client-visible
+// model names, for the admin's per-user model whitelist picker. Wired at
+// startup from the model registry.
+func SetModelLister(fn ModelLister) {
+	modelListerMu.Lock()
+	modelLister = fn
+	modelListerMu.Unlock()
+}
+
+// Models returns the currently available client-visible model names, or nil.
+func Models() []string {
+	modelListerMu.RLock()
+	fn := modelLister
+	modelListerMu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
+}
+
+// ValidModels filters names down to those that currently exist, preserving
+// order and dropping blanks/duplicates. When no lister is registered it returns
+// the cleaned input unchanged (best-effort validation).
+func ValidModels(names []string) []string {
+	cleaned := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		cleaned = append(cleaned, n)
+	}
+	all := Models()
+	if len(all) == 0 {
+		return cleaned
+	}
+	valid := make(map[string]struct{}, len(all))
+	for _, n := range all {
+		valid[n] = struct{}{}
+	}
+	out := make([]string, 0, len(cleaned))
+	for _, n := range cleaned {
+		if _, ok := valid[n]; ok {
+			out = append(out, n)
 		}
 	}
 	return out
