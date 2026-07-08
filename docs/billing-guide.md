@@ -254,60 +254,48 @@ USDT 充值在链上自动确认，无需手动操作。
 | GET | /admin/topup?user_id=&limit= | 所有充值订单 |
 | POST | /admin/topup/:id/confirm | 确认充值 `{note}` |
 | POST | /admin/credit | 手动调整余额 `{user_id, amount, note}` |
-| POST | /admin/users/:id/privileged | 设置/取消用户特权 `{privileged: bool}` |
-
-特权用户额外端点：
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | /accounts | 列出可绑定的上游账号（id/provider/label/status） |
-| PUT | /api-keys/:id/accounts | 改绑某 Key 的上游账号 `{bound_auth_ids: []}`（空=解绑） |
-| PUT | /api-keys/:id/unbilled | 切换某 Key 是否免余额 `{unbilled: bool}` |
+| POST | /admin/users/:id/limits | 设置某用户的访问控制 `{unbilled, allowed_models:[], allowed_auth_ids:[]}` |
+| GET | /admin/models | 列出全部可选模型（供白名单选择） |
+| GET | /admin/accounts | 列出全部上游账号（id/provider/label/status） |
 
 ---
 
-## 五、特权与 Key 的两种独立能力
+## 五、访问控制（仅超级管理员，按用户设置）
 
-设计上把两件**互相独立**的事拆开了：
+不再有"特权账号"这一层。**只有超级管理员**（`is_admin`，即用 `BILLING_ADMIN_EMAIL` 邮箱注册那个账号）能给**每个用户**设三样东西，其他账号完全没有管理入口：
 
-- **`is_privileged`（用户级）** = **能力开关**：只决定"谁被**允许**创建带下面两种特殊属性的 Key"。它本身不影响计费、不影响路由。
-- **`bound_auth_ids`（Key 级）** = **账号绑定 / 路由限制**：这个 Key 只能走指定的上游账号。
-- **`unbilled`（Key 级）** = **免余额 / 不计费**：这个 Key 跳过余额检查、用量仍记录但不扣钱包。
+| 字段（users 表） | 含义 |
+|---|---|
+| `unbilled` | **免余额**：跳过余额检查、用量仍记录但不扣钱包 |
+| `allowed_models` | **可用模型白名单**：只能调用这些客户端可见模型（空 = 全部） |
+| `allowed_auth_ids` | **可用账号白名单**：只能使用这些上游账号（空 = 全部） |
 
-两个 Key 级属性**任意组合**，互不牵连。所以同一个特权用户可以同时拥有：
+三者独立、任意组合，且**作用于该用户名下所有 API Key**（设置在用户上，不在 Key 上）。
 
-| 场景 | bound_auth_ids | unbilled |
-|---|---|---|
-| 普通付费 | 空 | 否 |
-| 付费但只走指定账号（成本隔离） | 有 | 否 |
-| 内部免费、只走某账号 | 有 | 是 |
-| 内部免费、不限账号 | 空 | 是 |
+### 5.1 怎么设
 
-### 5.1 授予特权（能力开关）
+管理员在「管理」页的用户列表点某用户的「**管理**」→ 弹窗里：
 
-管理员在「管理」页用户列表点「设为特权」（或 `POST /admin/users/:id/privileged {"privileged":true}`）。之后该用户建 Key 时才能勾选下面两项；非特权用户传 `bound_auth_ids`/`unbilled` 会被 403 拒绝。
+- 开关「**免余额**」；
+- 选「**可用模型**」，两个选项卡二选一（都不选 = 允许全部）：
+  - **按模型选**：从全部模型里逐个勾（带搜索）；
+  - **按认证文件选**：选一个/多个上游账号，等于放开这些账号提供的全部模型。
 
-### 5.2 账号绑定（bound_auth_ids）
+对应 API：`POST /admin/users/:id/limits {"unbilled":true,"allowed_models":["gpt-4o"],"allowed_auth_ids":[]}`。
 
-建 Key 时在「绑定上游账号」多选框选择（或 API 传 `bound_auth_ids`）：
+### 5.2 强制逻辑
 
-- **绑 1 个**：固定走它；
-- **绑多个**：只在这些账号里，按 CLIProxy 自身的**轮询 / fill-first** 调度；
-- **不绑**：走全部账号。
+- **免余额**：`unbilled` 用户的请求跳过 `BILLING_BALANCE_THRESHOLD`，计量时**不扣钱包**（用量照记）；默认仍受限流，除非 `BILLING_UNBILLED_BYPASS_RATE_LIMIT=true`。
+- **限模型**：客户请求一个不在 `allowed_models` 里的模型 → 直接 **403**（`model not allowed for this account`）。
+- **限账号**：把候选上游账号收窄到 `allowed_auth_ids`，再由 CLIProxy 自身的**轮询 / fill-first** 在其中调度（1 个=固定，多个=负载均衡）。
 
-账号 ID 来自 `GET /accounts`——注意 **ID 就是 `auths/` 下的凭证文件名**（如 `gemini-user@x.com.json`）。因此：**改名/删除/换文件名会让绑定失效**（该 Key 请求会因"无可用账号"而失败）。改绑用 `PUT /api-keys/:id/accounts`。
+> 说明：`allowed_auth_ids` 里的 ID 就是 `auths/` 下的**凭证文件名**（如 `gemini-user@x.com.json`）。改名/删除/换文件名会让该项失效——请求会因"无可用账号"失败。可选账号从 `GET /admin/accounts` 获取。
+>
+> 「按账号」限制的是**账号**、不是模型：所选账号得能服务客户请求的模型；如果要精确到模型，用「按模型」那一栏。
 
-> 绑定限制的是**账号**，不是模型：绑定的账号得能服务你请求的模型（绑 Gemini 账号却请求 GPT 会失败）。
+### 5.3 审计日志
 
-### 5.3 免余额（unbilled）
-
-建 Key 时勾「免余额」（或 API 传 `unbilled:true`，或事后 `PUT /api-keys/:id/unbilled`）。该 Key：跳过 `BILLING_BALANCE_THRESHOLD` 余额检查、用量**仍记录**（含成本与所用账号）但**不扣钱包**；默认仍受限流，除非 `BILLING_UNBILLED_BYPASS_RATE_LIMIT=true`。
-
-> 注意：`unbilled` 是 Key 级属性。取消用户特权**不会**自动改动其已创建的 unbilled Key（要停就吊销那些 Key，或 `PUT /api-keys/:id/unbilled {"unbilled":false}`）。
-
-### 5.4 审计日志
-
-每条用量记录都写入实际服务它的上游账号（`auth_id`/`auth_label`），在「用量明细」的「账号」列可见；unbilled 请求还会打一条 `billing: unbilled request served`（含用户/账号/provider/model）。→ 谁用了哪个账号的额度可追溯。
+每条用量记录都写入实际服务它的上游账号（`auth_id`/`auth_label`），在「用量明细」的「账号」列可见；`unbilled` 请求还会打一条 `billing: unbilled request served`（含用户/账号/provider/model）。→ 谁用了哪个账号的额度可追溯。
 
 ---
 
