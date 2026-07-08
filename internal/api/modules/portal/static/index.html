@@ -3,232 +3,357 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>API Portal</title>
+<title>API Console</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-:root{--bg:#f5f7fa;--card:#fff;--primary:#4f46e5;--primary-h:#4338ca;--danger:#ef4444;--success:#22c55e;--text:#1e293b;--muted:#64748b;--border:#e2e8f0;--radius:8px}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
-a{color:var(--primary);text-decoration:none}
+:root{
+  --bg:#0b0e14; --bg-2:#0d1117; --surface:#12161f; --surface-2:#161b26;
+  --border:#232a38; --border-2:#2c3547;
+  --text:#e6edf3; --muted:#8b94a7; --faint:#5b6472;
+  --accent:#6366f1; --accent-2:#818cf8; --accent-soft:rgba(99,102,241,.15);
+  --success:#22c55e; --danger:#f43f5e; --warn:#f59e0b; --info:#38bdf8;
+  --radius:12px; --radius-sm:9px;
+  --shadow:0 8px 30px rgba(0,0,0,.35);
+}
+html,body{height:100%}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;z-index:-1;background:
+  radial-gradient(1200px 600px at 15% -10%,rgba(99,102,241,.14),transparent 60%),
+  radial-gradient(900px 500px at 110% 10%,rgba(56,189,248,.10),transparent 55%);}
+a{color:var(--accent-2);text-decoration:none}
 .hidden{display:none!important}
-/* Auth page */
-.auth-wrap{display:flex;justify-content:center;align-items:center;min-height:100vh}
-.auth-box{background:var(--card);padding:2rem;border-radius:var(--radius);box-shadow:0 1px 3px rgba(0,0,0,.1);width:100%;max-width:400px}
-.auth-box h2{margin-bottom:1.5rem;text-align:center;font-size:1.5rem}
-.auth-box .tabs{display:flex;gap:1rem;margin-bottom:1.5rem;border-bottom:2px solid var(--border);padding-bottom:.5rem}
-.auth-box .tab{cursor:pointer;padding:.25rem .5rem;border:none;background:none;font-size:1rem;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-2px}
-.auth-box .tab.active{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}
+.muted{color:var(--muted)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:99px;border:2px solid transparent;background-clip:padding-box}
+
+/* ---------- Buttons ---------- */
+.btn{display:inline-flex;align-items:center;gap:.4rem;padding:.5rem .9rem;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:.85rem;font-weight:600;cursor:pointer;background:var(--surface-2);color:var(--text);transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:var(--faint);transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.btn-primary{background:linear-gradient(180deg,var(--accent-2),var(--accent));border-color:transparent;color:#fff;box-shadow:0 4px 14px rgba(99,102,241,.35)}
+.btn-primary:hover{box-shadow:0 6px 20px rgba(99,102,241,.5)}
+.btn-danger{background:transparent;border-color:rgba(244,63,94,.4);color:#fb7185}.btn-danger:hover{background:rgba(244,63,94,.12);border-color:var(--danger)}
+.btn-success{background:transparent;border-color:rgba(34,197,94,.4);color:#4ade80}.btn-success:hover{background:rgba(34,197,94,.12)}
+.btn-sm{padding:.32rem .6rem;font-size:.78rem}
+.btn-block{width:100%;justify-content:center}
+.btn-ghost{background:transparent;border-color:var(--border)}
+.icon-btn{background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:1.1rem;padding:.25rem .4rem;border-radius:8px}
+.icon-btn:hover{background:var(--surface-2);color:var(--text)}
+
+/* ---------- Forms ---------- */
 .form-group{margin-bottom:1rem}
-.form-group label{display:block;margin-bottom:.25rem;font-size:.875rem;font-weight:500}
-.form-group input{width:100%;padding:.5rem .75rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.9rem;outline:none}
-.form-group input:focus{border-color:var(--primary);box-shadow:0 0 0 2px rgba(79,70,229,.15)}
-.btn{display:inline-block;padding:.5rem 1rem;border:none;border-radius:var(--radius);font-size:.875rem;font-weight:500;cursor:pointer;transition:background .15s}
-.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-h)}
-.btn-danger{background:var(--danger);color:#fff}.btn-danger:hover{background:#dc2626}
-.btn-success{background:var(--success);color:#fff}
-.btn-sm{padding:.25rem .5rem;font-size:.8rem}
-.btn-block{width:100%;text-align:center}
-.msg{padding:.5rem;border-radius:var(--radius);margin-bottom:1rem;font-size:.85rem}
-.msg-error{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
-.msg-ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
-/* Layout */
+.form-group label,.field-label{display:block;margin-bottom:.4rem;font-size:.8rem;font-weight:600;color:var(--muted)}
+input,select{width:100%;padding:.6rem .75rem;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:.9rem;outline:none;background:var(--bg-2);color:var(--text);transition:border-color .15s,box-shadow .15s;font-family:inherit}
+input::placeholder{color:var(--faint)}
+input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.pw-wrap{position:relative}
+.pw-wrap input{padding-right:2.6rem}
+.pw-toggle{position:absolute;right:.4rem;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1rem;color:var(--muted);padding:.3rem;border-radius:6px;line-height:1}
+.pw-toggle:hover{color:var(--text)}
+.inline-form{display:flex;gap:.6rem;flex-wrap:wrap;align-items:flex-end}
+.inline-form .form-group{margin:0}
+.switch-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.75rem .9rem;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:1rem;cursor:pointer}
+.switch-row span{font-size:.9rem;font-weight:500}
+.switch-row input{width:auto;accent-color:var(--accent)}
+
+.msg{padding:.6rem .8rem;border-radius:var(--radius-sm);margin-bottom:1rem;font-size:.85rem;border:1px solid transparent}
+.msg-error{background:rgba(244,63,94,.1);color:#fda4af;border-color:rgba(244,63,94,.3)}
+.msg-ok{background:rgba(34,197,94,.1);color:#86efac;border-color:rgba(34,197,94,.3)}
+
+/* ---------- Auth ---------- */
+.auth-wrap{display:flex;justify-content:center;align-items:center;min-height:100vh;padding:1.5rem}
+.auth-box{background:var(--surface);border:1px solid var(--border);padding:2.2rem;border-radius:18px;box-shadow:var(--shadow);width:100%;max-width:400px}
+.auth-brand{display:flex;align-items:center;gap:.6rem;justify-content:center;margin-bottom:.4rem}
+.auth-brand .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--accent-2),var(--accent));display:flex;align-items:center;justify-content:center;font-size:1.2rem;box-shadow:0 6px 18px rgba(99,102,241,.4)}
+.auth-box h2{text-align:center;font-size:1.35rem;font-weight:700}
+.auth-sub{text-align:center;color:var(--muted);font-size:.85rem;margin-bottom:1.6rem}
+.seg{display:flex;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px;margin-bottom:1.4rem}
+.seg .tab{flex:1;cursor:pointer;padding:.5rem;border:none;background:none;font-size:.9rem;color:var(--muted);border-radius:7px;font-weight:600;transition:all .15s}
+.seg .tab.active{background:var(--surface-2);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.3)}
+
+/* ---------- Layout ---------- */
 .app{display:flex;min-height:100vh}
-.sidebar{width:220px;background:#1e293b;color:#e2e8f0;padding:1rem 0;flex-shrink:0;display:flex;flex-direction:column}
-.sidebar h1{font-size:1.1rem;padding:0 1rem 1rem;border-bottom:1px solid #334155;margin-bottom:.5rem}
-.sidebar nav a{display:block;padding:.6rem 1rem;color:#94a3b8;font-size:.9rem;transition:background .15s}
-.sidebar nav a:hover,.sidebar nav a.active{background:#334155;color:#fff}
-.sidebar .logout{margin-top:auto;padding:.6rem 1rem;color:#94a3b8;font-size:.85rem;cursor:pointer;border:none;background:none;text-align:left;width:100%}
-.sidebar .logout:hover{background:#334155;color:#fff}
-.main{flex:1;padding:1.5rem 2rem;overflow-x:auto}
-.main h2{font-size:1.3rem;margin-bottom:1rem}
-/* Cards & Stats */
-.stats{display:flex;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap}
-.stat-card{background:var(--card);padding:1rem 1.5rem;border-radius:var(--radius);box-shadow:0 1px 2px rgba(0,0,0,.06);min-width:180px;flex:1}
-.stat-card .label{font-size:.8rem;color:var(--muted);margin-bottom:.25rem}
-.stat-card .value{font-size:1.5rem;font-weight:700}
-.card{background:var(--card);padding:1.25rem;border-radius:var(--radius);box-shadow:0 1px 2px rgba(0,0,0,.06);margin-bottom:1rem}
-/* Table */
-table{width:100%;border-collapse:collapse;font-size:.85rem}
-th,td{padding:.5rem .75rem;text-align:left;border-bottom:1px solid var(--border)}
-th{background:var(--bg);font-weight:600;font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
-tr:hover{background:#f8fafc}
-.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:.75rem;font-weight:600}
-.badge-green{background:#dcfce7;color:#166534}
-.badge-red{background:#fee2e2;color:#991b1b}
-.badge-yellow{background:#fef9c3;color:#854d0e}
-.badge-blue{background:#dbeafe;color:#1e40af}
-.badge-gray{background:#f1f5f9;color:#475569}
-/* Topup */
-.methods-grid{display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1rem}
-.method-card{border:2px solid var(--border);border-radius:var(--radius);padding:1rem;cursor:pointer;min-width:140px;text-align:center;transition:border-color .15s}
-.method-card:hover,.method-card.selected{border-color:var(--primary)}
-.method-card .name{font-weight:600;margin-bottom:.25rem}
+.sidebar{width:236px;background:rgba(13,17,23,.7);backdrop-filter:blur(8px);border-right:1px solid var(--border);padding:1.1rem .8rem;flex-shrink:0;display:flex;flex-direction:column;gap:.2rem;position:sticky;top:0;height:100vh}
+.brand{display:flex;align-items:center;gap:.6rem;padding:.4rem .5rem 1rem}
+.brand .logo{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,var(--accent-2),var(--accent));display:flex;align-items:center;justify-content:center;font-size:1rem}
+.brand .name{font-weight:700;font-size:1.02rem}
+.sidebar nav{display:flex;flex-direction:column;gap:2px}
+.sidebar nav a{display:flex;align-items:center;gap:.7rem;padding:.6rem .7rem;color:var(--muted);font-size:.9rem;border-radius:var(--radius-sm);font-weight:500;transition:all .15s}
+.sidebar nav a .ic{width:18px;text-align:center;opacity:.9}
+.sidebar nav a:hover{background:var(--surface-2);color:var(--text)}
+.sidebar nav a.active{background:var(--accent-soft);color:#fff}
+.sidebar nav a.active .ic{color:var(--accent-2)}
+.side-foot{margin-top:auto;border-top:1px solid var(--border);padding-top:.7rem}
+.side-user{display:flex;align-items:center;gap:.6rem;padding:.4rem .5rem;font-size:.82rem}
+.avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#22d3ee,var(--accent));display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.85rem;flex-shrink:0}
+.side-user .em{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.logout{width:100%;margin-top:.4rem;padding:.5rem;color:var(--muted);font-size:.82rem;cursor:pointer;border:1px solid var(--border);background:none;border-radius:var(--radius-sm);text-align:center;font-weight:600}
+.logout:hover{background:var(--surface-2);color:#fb7185;border-color:rgba(244,63,94,.3)}
+.main{flex:1;padding:1.8rem 2.2rem;overflow-x:auto;max-width:1200px}
+.page-head{margin-bottom:1.4rem}
+.page-head h2{font-size:1.4rem;font-weight:700;letter-spacing:-.01em}
+.page-head p{color:var(--muted);font-size:.88rem;margin-top:.2rem}
+
+/* ---------- Cards & stats ---------- */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1rem;margin-bottom:1.5rem}
+.stat-card{background:var(--surface);border:1px solid var(--border);padding:1.1rem 1.3rem;border-radius:var(--radius)}
+.stat-card .label{font-size:.78rem;color:var(--muted);margin-bottom:.4rem;font-weight:600;letter-spacing:.02em}
+.stat-card .value{font-size:1.7rem;font-weight:700;letter-spacing:-.02em}
+.stat-card .value.sm{font-size:1rem;font-weight:600}
+.card{background:var(--surface);border:1px solid var(--border);padding:1.3rem;border-radius:var(--radius);margin-bottom:1.2rem}
+.card h3{font-size:.98rem;font-weight:700;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem}
+
+/* ---------- Table ---------- */
+.table-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.86rem}
+th,td{padding:.7rem .9rem;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
+th{background:var(--bg-2);font-weight:600;font-size:.74rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--surface-2)}
+td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:.82rem}
+.empty{text-align:center;color:var(--faint);padding:1.6rem}
+.badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:.72rem;font-weight:700;border:1px solid transparent}
+.badge-green{background:rgba(34,197,94,.13);color:#4ade80;border-color:rgba(34,197,94,.25)}
+.badge-red{background:rgba(244,63,94,.13);color:#fb7185;border-color:rgba(244,63,94,.25)}
+.badge-yellow{background:rgba(245,158,11,.13);color:#fbbf24;border-color:rgba(245,158,11,.25)}
+.badge-blue{background:rgba(56,189,248,.13);color:#38bdf8;border-color:rgba(56,189,248,.25)}
+.badge-gray{background:var(--surface-2);color:var(--muted);border-color:var(--border-2)}
+.badge-violet{background:var(--accent-soft);color:var(--accent-2);border-color:rgba(99,102,241,.3)}
+
+/* ---------- Topup ---------- */
+.methods-grid{display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.2rem}
+.method-card{border:1px solid var(--border-2);border-radius:var(--radius);padding:1rem 1.2rem;cursor:pointer;min-width:150px;text-align:center;transition:all .15s;background:var(--surface)}
+.method-card:hover{border-color:var(--faint);transform:translateY(-2px)}
+.method-card.selected{border-color:var(--accent);background:var(--accent-soft)}
+.method-card .name{font-weight:700;margin-bottom:.25rem}
 .method-card .currency{font-size:.8rem;color:var(--muted)}
-.qr-img{max-width:200px;border:1px solid var(--border);border-radius:var(--radius);margin:1rem 0}
+.qr-img{max-width:210px;border:1px solid var(--border);border-radius:var(--radius);margin:1rem 0;background:#fff;padding:6px}
 .copy-wrap{display:flex;align-items:center;gap:.5rem;margin:.5rem 0}
-.copy-wrap code{background:var(--bg);padding:.25rem .5rem;border-radius:4px;font-size:.85rem;flex:1;word-break:break-all}
-.copy-wrap .btn{flex-shrink:0}
-/* Mobile */
-@media(max-width:768px){
-  .sidebar{width:100%;position:fixed;bottom:0;flex-direction:row;padding:0;z-index:10;border-top:1px solid #334155}
-  .sidebar h1,.sidebar .logout{display:none}
-  .sidebar nav{display:flex;width:100%}
-  .sidebar nav a{flex:1;text-align:center;padding:.75rem .25rem;font-size:.75rem}
-  .main{padding:1rem;padding-bottom:4rem}
-  .stats{flex-direction:column}
+.copy-wrap code{background:var(--bg-2);border:1px solid var(--border);padding:.4rem .6rem;border-radius:8px;font-size:.85rem;flex:1;word-break:break-all}
+
+/* ---------- Modal ---------- */
+.modal-overlay{position:fixed;inset:0;background:rgba(3,6,12,.7);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:50;padding:1rem}
+.modal{background:var(--surface);border:1px solid var(--border-2);border-radius:16px;width:100%;max-width:520px;box-shadow:var(--shadow);max-height:88vh;display:flex;flex-direction:column}
+.modal-head{display:flex;align-items:flex-start;justify-content:space-between;padding:1.2rem 1.4rem;border-bottom:1px solid var(--border)}
+.modal-title{font-weight:700;font-size:1.05rem}
+.modal-sub{color:var(--muted);font-size:.82rem;margin-top:.15rem}
+.modal-body{padding:1.2rem 1.4rem;overflow-y:auto}
+.modal-foot{display:flex;align-items:center;gap:.6rem;justify-content:flex-end;padding:1rem 1.4rem;border-top:1px solid var(--border)}
+.modal-foot #um-msg{margin:0;flex:1}
+.tabs-sm{display:flex;gap:.4rem;margin:.4rem 0 .8rem}
+.tab-sm{padding:.4rem .8rem;border:1px solid var(--border-2);background:var(--bg-2);color:var(--muted);border-radius:99px;font-size:.82rem;font-weight:600;cursor:pointer}
+.tab-sm.active{background:var(--accent-soft);color:var(--accent-2);border-color:rgba(99,102,241,.4)}
+.picker-search{margin-bottom:.5rem}
+.picker-list{max-height:230px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-2)}
+.picker-item{display:flex;align-items:center;gap:.6rem;padding:.5rem .7rem;font-size:.85rem;cursor:pointer;border-bottom:1px solid var(--border)}
+.picker-item:last-child{border-bottom:none}
+.picker-item:hover{background:var(--surface-2)}
+.picker-item input{width:auto;accent-color:var(--accent)}
+.hint{font-size:.78rem;color:var(--faint);margin-top:.4rem}
+
+@media(max-width:820px){
+  .sidebar{width:100%;position:fixed;bottom:0;top:auto;height:auto;flex-direction:row;padding:.4rem;z-index:20;border-right:none;border-top:1px solid var(--border)}
+  .brand,.side-foot{display:none}
+  .sidebar nav{flex-direction:row;width:100%;justify-content:space-around}
+  .sidebar nav a{flex-direction:column;gap:2px;font-size:.68rem;padding:.4rem}
+  .main{padding:1.1rem;padding-bottom:5rem;max-width:100%}
 }
 </style>
 </head>
 <body>
 
-<!-- Auth Page -->
-<div id="page-auth" class="auth-wrap">
-<div class="auth-box">
-  <h2>API Portal</h2>
-  <div class="tabs">
-    <button class="tab active" onclick="switchAuthTab('login')">登录</button>
-    <button class="tab" onclick="switchAuthTab('register')">注册</button>
+<!-- ===================== Auth ===================== -->
+<div id="page-auth" class="auth-wrap hidden">
+  <div class="auth-box">
+    <div class="auth-brand"><div class="logo">⚡</div></div>
+    <h2>API Console</h2>
+    <p class="auth-sub">登录以管理你的密钥、额度与用量</p>
+    <div class="seg">
+      <button class="tab active" onclick="switchAuthTab('login')">登录</button>
+      <button class="tab" onclick="switchAuthTab('register')">注册</button>
+    </div>
+    <div id="auth-msg"></div>
+    <form id="form-login" onsubmit="return doLogin(event)">
+      <div class="form-group"><label>邮箱</label><input type="email" id="login-email" autocomplete="username" required></div>
+      <div class="form-group"><label>密码</label>
+        <div class="pw-wrap"><input type="password" id="login-pass" autocomplete="current-password" required>
+          <button type="button" class="pw-toggle" onclick="togglePw(this)" aria-label="显示密码">👁</button></div>
+      </div>
+      <button class="btn btn-primary btn-block" type="submit">登录</button>
+    </form>
+    <form id="form-register" class="hidden" onsubmit="return doRegister(event)">
+      <div class="form-group"><label>邮箱</label><input type="email" id="reg-email" autocomplete="username" required></div>
+      <div class="form-group"><label>密码 (至少 8 位)</label>
+        <div class="pw-wrap"><input type="password" id="reg-pass" minlength="8" autocomplete="new-password" required>
+          <button type="button" class="pw-toggle" onclick="togglePw(this)" aria-label="显示密码">👁</button></div>
+      </div>
+      <div class="form-group"><label>昵称 (可选)</label><input type="text" id="reg-name"></div>
+      <button class="btn btn-primary btn-block" type="submit">创建账号</button>
+    </form>
   </div>
-  <div id="auth-msg"></div>
-  <form id="form-login" onsubmit="return doLogin(event)">
-    <div class="form-group"><label>邮箱</label><input type="email" id="login-email" required></div>
-    <div class="form-group"><label>密码</label><input type="password" id="login-pass" required></div>
-    <button class="btn btn-primary btn-block" type="submit">登录</button>
-  </form>
-  <form id="form-register" class="hidden" onsubmit="return doRegister(event)">
-    <div class="form-group"><label>邮箱</label><input type="email" id="reg-email" required></div>
-    <div class="form-group"><label>密码 (至少8位)</label><input type="password" id="reg-pass" minlength="8" required></div>
-    <div class="form-group"><label>昵称</label><input type="text" id="reg-name"></div>
-    <button class="btn btn-primary btn-block" type="submit">注册</button>
-  </form>
-</div>
 </div>
 
-<!-- App Layout -->
+<!-- ===================== App ===================== -->
 <div id="page-app" class="app hidden">
   <aside class="sidebar">
-    <h1>API Portal</h1>
+    <div class="brand"><div class="logo">⚡</div><div class="name">API Console</div></div>
     <nav>
-      <a href="#dashboard" class="active" data-page="dashboard">概览</a>
-      <a href="#keys" data-page="keys">API Keys</a>
-      <a href="#topup" data-page="topup">充值</a>
-      <a href="#usage" data-page="usage">用量</a>
-      <a href="#settings" data-page="settings">设置</a>
-      <a href="#admin" data-page="admin" id="nav-admin" class="hidden">管理</a>
+      <a href="#dashboard" class="active" data-page="dashboard"><span class="ic">◎</span>概览</a>
+      <a href="#keys" data-page="keys"><span class="ic">⚿</span>API Keys</a>
+      <a href="#topup" data-page="topup"><span class="ic">＋</span>充值</a>
+      <a href="#usage" data-page="usage"><span class="ic">▤</span>用量</a>
+      <a href="#settings" data-page="settings"><span class="ic">⚙</span>设置</a>
+      <a href="#admin" data-page="admin" id="nav-admin" class="hidden"><span class="ic">★</span>管理</a>
     </nav>
-    <button class="logout" onclick="doLogout()">退出登录</button>
+    <div class="side-foot">
+      <div class="side-user"><div class="avatar" id="side-avatar">U</div><div class="em muted" id="side-email">-</div></div>
+      <button class="logout" onclick="doLogout()">退出登录</button>
+    </div>
   </aside>
-  <div class="main" id="main-content">
+
+  <div class="main">
     <!-- Dashboard -->
     <section id="sec-dashboard">
-      <h2>概览</h2>
+      <div class="page-head"><h2>概览</h2><p>账户状态一览</p></div>
       <div class="stats">
         <div class="stat-card"><div class="label">余额</div><div class="value" id="dash-balance">-</div></div>
-        <div class="stat-card"><div class="label">API Keys</div><div class="value" id="dash-keys">-</div></div>
-        <div class="stat-card"><div class="label">邮箱</div><div class="value" id="dash-email" style="font-size:1rem">-</div></div>
+        <div class="stat-card"><div class="label">活跃 API Keys</div><div class="value" id="dash-keys">-</div></div>
+        <div class="stat-card"><div class="label">账号</div><div class="value sm" id="dash-email">-</div></div>
+        <div class="stat-card"><div class="label">计费状态</div><div class="value sm" id="dash-plan">-</div></div>
       </div>
       <div class="card">
-        <h3 style="margin-bottom:.75rem;font-size:1rem">最近用量</h3>
-        <table><thead><tr><th>时间</th><th>模型</th><th>输入</th><th>输出</th><th>费用</th><th>状态</th></tr></thead>
-        <tbody id="dash-usage"></tbody></table>
+        <h3>最近用量</h3>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>费用</th><th>状态</th></tr></thead>
+        <tbody id="dash-usage"></tbody></table></div>
       </div>
     </section>
 
     <!-- Keys -->
     <section id="sec-keys" class="hidden">
-      <h2>API Keys</h2>
-      <div style="margin-bottom:.5rem;display:flex;gap:.5rem;align-items:center">
-        <input id="key-name" placeholder="Key 名称 (可选)" style="padding:.4rem .6rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem">
-        <button class="btn btn-primary btn-sm" onclick="createKey()">创建新 Key</button>
-      </div>
-      <div id="key-accounts-wrap" class="hidden" style="margin-bottom:1rem">
-        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.3rem">绑定上游账号（特权专属，可多选；多选时按 CLIProxy 的轮询/fill-first 策略在其中调度；不选=不绑定，走全部账号）</label>
-        <select id="key-accounts" multiple size="4" style="width:100%;max-width:460px;padding:.4rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem"></select>
-        <label style="display:block;margin-top:.5rem;font-size:.85rem"><input type="checkbox" id="key-unbilled"> 免余额（此 Key 不计费/不受余额限制，用量仍记录）</label>
-      </div>
-      <div id="new-key-msg"></div>
+      <div class="page-head"><h2>API Keys</h2><p>用于调用代理的密钥；创建后仅显示一次，请立即保存</p></div>
       <div class="card">
-        <table><thead><tr><th>前缀</th><th>名称</th><th>绑定账号</th><th>创建时间</th><th>最后使用</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody id="keys-list"></tbody></table>
+        <div class="inline-form" style="margin-bottom:.8rem">
+          <div class="form-group" style="flex:1;min-width:200px"><label>名称 (可选)</label><input id="key-name" placeholder="例如：my-app"></div>
+          <button class="btn btn-primary" onclick="createKey()">＋ 创建新 Key</button>
+        </div>
+        <div id="new-key-msg"></div>
+        <div class="table-wrap"><table><thead><tr><th>前缀</th><th>名称</th><th>创建时间</th><th>最后使用</th><th>状态</th><th></th></tr></thead>
+        <tbody id="keys-list"></tbody></table></div>
       </div>
     </section>
 
     <!-- Topup -->
     <section id="sec-topup" class="hidden">
-      <h2>充值</h2>
+      <div class="page-head"><h2>充值</h2><p>选择支付方式并按显示的精确金额付款</p></div>
       <div id="topup-methods" class="methods-grid"></div>
       <div id="topup-form" class="card hidden">
-        <div class="form-group"><label>金额</label><input type="number" id="topup-amount" min="1" step="1" placeholder="输入充值金额"></div>
+        <div class="form-group"><label>充值金额</label><input type="number" id="topup-amount" min="1" step="1" placeholder="输入金额"></div>
         <button class="btn btn-primary" onclick="createTopup()">创建订单</button>
       </div>
       <div id="topup-order-detail" class="card hidden"></div>
-      <h3 style="margin:1.5rem 0 .75rem;font-size:1rem">充值记录</h3>
       <div class="card">
-        <table><thead><tr><th>时间</th><th>方式</th><th>金额</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody id="topup-list"></tbody></table>
+        <h3>充值记录</h3>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>方式</th><th>金额</th><th>状态</th><th></th></tr></thead>
+        <tbody id="topup-list"></tbody></table></div>
       </div>
     </section>
 
     <!-- Usage -->
     <section id="sec-usage" class="hidden">
-      <h2>用量明细</h2>
+      <div class="page-head"><h2>用量明细</h2><p>每条请求的 token、费用与实际服务它的上游账号</p></div>
       <div class="stats" id="usage-charts"></div>
       <div class="card">
-        <table><thead><tr><th>时间</th><th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th></tr></thead>
-        <tbody id="usage-list"></tbody></table>
-        <div style="margin-top:.75rem;text-align:center">
-          <button class="btn btn-sm" id="usage-more" onclick="loadMoreUsage()">加载更多</button>
-        </div>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th></tr></thead>
+        <tbody id="usage-list"></tbody></table></div>
+        <div style="margin-top:1rem;text-align:center"><button class="btn btn-ghost btn-sm" id="usage-more" onclick="loadMoreUsage()">加载更多</button></div>
       </div>
     </section>
 
     <!-- Settings -->
     <section id="sec-settings" class="hidden">
-      <h2>设置</h2>
-      <div class="card">
-        <h3 style="margin-bottom:.75rem;font-size:1rem">修改密码</h3>
+      <div class="page-head"><h2>设置</h2><p>账户与安全</p></div>
+      <div class="card" style="max-width:460px">
+        <h3>修改密码</h3>
         <div id="pw-msg"></div>
         <form onsubmit="return doChangePassword(event)">
-          <div class="form-group"><label>当前密码</label><input type="password" id="pw-old" required></div>
-          <div class="form-group"><label>新密码 (至少8位)</label><input type="password" id="pw-new" minlength="8" required></div>
-          <button class="btn btn-primary" type="submit">修改密码</button>
+          <div class="form-group"><label>当前密码</label>
+            <div class="pw-wrap"><input type="password" id="pw-old" autocomplete="current-password" required>
+              <button type="button" class="pw-toggle" onclick="togglePw(this)">👁</button></div></div>
+          <div class="form-group"><label>新密码 (至少 8 位)</label>
+            <div class="pw-wrap"><input type="password" id="pw-new" minlength="8" autocomplete="new-password" required>
+              <button type="button" class="pw-toggle" onclick="togglePw(this)">👁</button></div></div>
+          <button class="btn btn-primary" type="submit">保存</button>
         </form>
       </div>
     </section>
 
     <!-- Admin -->
     <section id="sec-admin" class="hidden">
-      <h2>管理面板</h2>
+      <div class="page-head"><h2>管理</h2><p>超级管理员：确认充值、管理用户额度与可用模型</p></div>
       <div class="card">
-        <h3 style="margin-bottom:.75rem;font-size:1rem">待确认充值</h3>
-        <table><thead><tr><th>时间</th><th>用户</th><th>方式</th><th>金额</th><th>TX Hash</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody id="admin-orders"></tbody></table>
+        <h3>待确认充值</h3>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>方式</th><th>金额</th><th>TX Hash</th><th>状态</th><th></th></tr></thead>
+        <tbody id="admin-orders"></tbody></table></div>
       </div>
       <div class="card">
-        <h3 style="margin-bottom:.75rem;font-size:1rem">用户列表</h3>
-        <table><thead><tr><th>邮箱</th><th>昵称</th><th>余额</th><th>特权</th><th>注册时间</th><th>操作</th></tr></thead>
-        <tbody id="admin-users"></tbody></table>
+        <h3>用户</h3>
+        <div class="table-wrap"><table><thead><tr><th>邮箱</th><th>余额</th><th>计费</th><th>可用范围</th><th>注册</th><th></th></tr></thead>
+        <tbody id="admin-users"></tbody></table></div>
       </div>
       <div class="card">
-        <h3 style="margin-bottom:.75rem;font-size:1rem">手动充值</h3>
+        <h3>手动调整余额</h3>
         <div id="credit-msg"></div>
-        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end">
-          <div class="form-group" style="margin:0"><label>用户 ID</label><input id="credit-uid" style="padding:.4rem .6rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem"></div>
-          <div class="form-group" style="margin:0"><label>金额</label><input type="number" id="credit-amount" step="0.01" style="padding:.4rem .6rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem;width:100px"></div>
-          <div class="form-group" style="margin:0"><label>备注</label><input id="credit-note" style="padding:.4rem .6rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem"></div>
-          <button class="btn btn-primary btn-sm" onclick="doAdminCredit()">充值</button>
+        <div class="inline-form">
+          <div class="form-group"><label>用户 ID</label><input id="credit-uid" style="width:230px"></div>
+          <div class="form-group"><label>金额 (负数=扣减)</label><input type="number" id="credit-amount" step="0.01" style="width:130px"></div>
+          <div class="form-group" style="flex:1;min-width:140px"><label>备注</label><input id="credit-note"></div>
+          <button class="btn btn-primary" onclick="doAdminCredit()">提交</button>
         </div>
       </div>
     </section>
   </div>
 </div>
 
+<!-- ===================== User-limits modal (admin) ===================== -->
+<div id="user-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-head">
+      <div><div class="modal-title">用户权限</div><div class="modal-sub" id="um-email">-</div></div>
+      <button class="icon-btn" onclick="closeUserModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <label class="switch-row"><span>免余额（不计费，用量仍记录）</span><input type="checkbox" id="um-unbilled"></label>
+      <div class="field-label">可用模型（都不选 = 允许全部）</div>
+      <div class="tabs-sm">
+        <button class="tab-sm active" data-tab="models" onclick="umTab('models')">按模型选</button>
+        <button class="tab-sm" data-tab="accounts" onclick="umTab('accounts')">按认证文件选</button>
+      </div>
+      <div id="um-pane-models" class="picker">
+        <input class="picker-search" id="um-model-search" placeholder="搜索模型…" oninput="filterModels(this.value)">
+        <div class="picker-list" id="um-model-list"></div>
+        <div class="hint">勾选后，该用户只能调用选中的模型。</div>
+      </div>
+      <div id="um-pane-accounts" class="picker hidden">
+        <div class="picker-list" id="um-account-list"></div>
+        <div class="hint">勾选后，该用户只能使用选中认证文件（及它们提供的全部模型），按 CLIProxy 轮询/fill-first 调度。</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <div id="um-msg"></div>
+      <button class="btn" onclick="closeUserModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveUserLimits()">保存</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const BASE = location.pathname.replace(/\/ui\/?$/, '');
 let token = localStorage.getItem('portal_token');
+let isAdmin = false;
 let selectedMethod = null;
 let usageCursor = '';
-let isPrivileged = false;
-let myAccounts = [];
+let adminUsers = [], allModels = [], allAccounts = [], editingUserId = null;
 
 function api(path, opts = {}) {
   const headers = {'Content-Type': 'application/json'};
@@ -240,17 +365,22 @@ function api(path, opts = {}) {
   });
 }
 
-// Auth
+// ---- Auth ----
 function switchAuthTab(tab) {
-  document.querySelectorAll('.auth-box .tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.seg .tab').forEach(t => t.classList.remove('active'));
   document.querySelector(`.tab[onclick*="${tab}"]`).classList.add('active');
   document.getElementById('form-login').classList.toggle('hidden', tab !== 'login');
   document.getElementById('form-register').classList.toggle('hidden', tab !== 'register');
   document.getElementById('auth-msg').innerHTML = '';
 }
-
 function showAuthMsg(msg, ok) {
   document.getElementById('auth-msg').innerHTML = `<div class="msg ${ok ? 'msg-ok' : 'msg-error'}">${esc(msg)}</div>`;
+}
+function togglePw(btn) {
+  const inp = btn.parentElement.querySelector('input');
+  const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  btn.textContent = show ? '🙈' : '👁';
 }
 
 async function doLogin(e) {
@@ -264,7 +394,6 @@ async function doLogin(e) {
     enterApp();
   } catch(err) { showAuthMsg(err.message); }
 }
-
 async function doRegister(e) {
   e.preventDefault();
   try {
@@ -277,129 +406,94 @@ async function doRegister(e) {
     enterApp();
   } catch(err) { showAuthMsg(err.message); }
 }
-
+// Hard reset on logout so no previous-account data can linger in memory/DOM.
 function doLogout() {
   token = null; localStorage.removeItem('portal_token');
-  document.getElementById('page-app').classList.add('hidden');
-  document.getElementById('page-auth').classList.remove('hidden');
+  location.reload();
 }
 
-// App
+// ---- App shell ----
 async function enterApp() {
   document.getElementById('page-auth').classList.add('hidden');
   document.getElementById('page-app').classList.remove('hidden');
   try {
     const me = await api('/me');
-    isAdmin = me.user.is_admin;
-    isPrivileged = !!me.user.is_privileged;
+    isAdmin = !!me.user.is_admin;
     document.getElementById('nav-admin').classList.toggle('hidden', !isAdmin);
-    document.getElementById('key-accounts-wrap').classList.toggle('hidden', !isPrivileged);
-    if (isPrivileged) loadMyAccounts();
+    document.getElementById('side-email').textContent = me.user.email;
+    document.getElementById('side-avatar').textContent = (me.user.email||'U').charAt(0).toUpperCase();
   } catch(e) {}
   navigate(location.hash.slice(1) || 'dashboard');
 }
-
 function navigate(page) {
   if (!page || !document.getElementById('sec-' + page)) page = 'dashboard';
+  if (page === 'admin' && !isAdmin) page = 'dashboard';
   document.querySelectorAll('[id^="sec-"]').forEach(s => s.classList.add('hidden'));
   document.getElementById('sec-' + page).classList.remove('hidden');
-  document.querySelectorAll('.sidebar nav a').forEach(a => {
-    a.classList.toggle('active', a.dataset.page === page);
-  });
+  document.querySelectorAll('.sidebar nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
   if (page === 'dashboard') loadDashboard();
   else if (page === 'keys') loadKeys();
   else if (page === 'topup') loadTopup();
   else if (page === 'usage') { usageCursor = ''; loadUsage(true); loadUsageStats(); }
   else if (page === 'admin') loadAdmin();
 }
-
 window.addEventListener('hashchange', () => navigate(location.hash.slice(1)));
 
-// Dashboard
+// ---- Dashboard ----
 async function loadDashboard() {
   try {
-    const [me, wallet, usage] = await Promise.all([
-      api('/me'), api('/wallet'), api('/usage?limit=10')
+    const [me, wallet, usage, keys] = await Promise.all([
+      api('/me'), api('/wallet'), api('/usage?limit=10'), api('/api-keys')
     ]);
     document.getElementById('dash-email').textContent = me.user.email;
     document.getElementById('dash-balance').textContent = parseFloat(wallet.balance).toFixed(2);
-    const keys = await api('/api-keys');
     document.getElementById('dash-keys').textContent = keys.keys.filter(k => !k.revoked_at).length;
+    document.getElementById('dash-plan').innerHTML = me.user.unbilled
+      ? '<span class="badge badge-violet">免余额</span>' : '<span class="badge badge-gray">计费</span>';
     const tbody = document.getElementById('dash-usage');
     tbody.innerHTML = usage.records.length ? usage.records.map(r => `<tr>
-      <td>${fmtTime(r.created_at)}</td><td>${esc(r.model)}</td>
+      <td>${fmtTime(r.created_at)}</td><td>${esc(r.model)}</td><td>${esc(r.auth_label || r.auth_id || '-')}</td>
       <td>${r.input_tokens}</td><td>${r.output_tokens}</td>
-      <td>${parseFloat(r.cost).toFixed(4)}</td>
-      <td>${statusBadge(r.status)}</td></tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--muted)">暂无记录</td></tr>';
+      <td>${parseFloat(r.cost).toFixed(4)}</td><td>${statusBadge(r.status)}</td></tr>`).join('')
+      : '<tr><td colspan="7" class="empty">暂无记录</td></tr>';
   } catch(err) { if (err.status === 401) doLogout(); }
 }
 
-// Keys
+// ---- Keys ----
 async function loadKeys() {
   try {
     const r = await api('/api-keys');
     const tbody = document.getElementById('keys-list');
     tbody.innerHTML = r.keys.length ? r.keys.map(k => `<tr>
-      <td><code>${esc(k.key_prefix)}...</code></td><td>${esc(k.name||'-')}</td>
-      <td>${(k.bound_auth_ids&&k.bound_auth_ids.length) ? k.bound_auth_ids.map(id=>esc(accountLabel(id))).join(', ') : '<span style="color:var(--muted)">全部</span>'}${k.unbilled ? ' <span class="badge badge-blue">免费</span>' : ''}</td>
+      <td><code>${esc(k.key_prefix)}…</code></td><td>${esc(k.name||'-')}</td>
       <td>${fmtTime(k.created_at)}</td><td>${k.last_used_at ? fmtTime(k.last_used_at) : '-'}</td>
       <td>${k.revoked_at ? '<span class="badge badge-red">已吊销</span>' : '<span class="badge badge-green">活跃</span>'}</td>
-      <td>${k.revoked_at ? '' : `<button class="btn btn-danger btn-sm" onclick="revokeKey('${k.id}')">吊销</button>`}</td>
-    </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--muted)">无 Key</td></tr>';
+      <td style="text-align:right">${k.revoked_at ? '' : `<button class="btn btn-danger btn-sm" onclick="revokeKey('${k.id}')">吊销</button>`}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">还没有 Key，点上方创建一个</td></tr>';
   } catch(err) { if (err.status === 401) doLogout(); }
 }
-
 async function createKey() {
   try {
     const name = document.getElementById('key-name').value;
-    const body = {name};
-    if (isPrivileged) {
-      const sel = document.getElementById('key-accounts');
-      const ids = Array.from(sel.selectedOptions).map(o => o.value);
-      if (ids.length) body.bound_auth_ids = ids;
-      if (document.getElementById('key-unbilled').checked) body.unbilled = true;
-    }
-    const r = await api('/api-keys', {method:'POST', body: JSON.stringify(body)});
+    const r = await api('/api-keys', {method:'POST', body: JSON.stringify({name})});
     document.getElementById('new-key-msg').innerHTML = `<div class="msg msg-ok">
-      Key 已创建，请立即复制（仅显示一次）：<br>
+      Key 已创建，请立即复制（仅显示一次）：
       <div class="copy-wrap"><code id="new-key-val">${esc(r.key)}</code>
       <button class="btn btn-sm btn-primary" onclick="copyText('new-key-val')">复制</button></div></div>`;
     document.getElementById('key-name').value = '';
-    if (document.getElementById('key-unbilled')) document.getElementById('key-unbilled').checked = false;
     loadKeys();
   } catch(err) { document.getElementById('new-key-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
 }
-
-// Load the upstream accounts this privileged user may bind keys to.
-async function loadMyAccounts() {
-  try {
-    const r = await api('/accounts');
-    myAccounts = r.accounts || [];
-    const sel = document.getElementById('key-accounts');
-    if (sel) sel.innerHTML = myAccounts.map(a =>
-      `<option value="${esc(a.id)}">${esc(a.label || a.provider)} · ${esc(a.provider)}${a.status && a.status!=='active' ? ' ('+esc(a.status)+')' : ''}</option>`
-    ).join('');
-  } catch(e) {}
-}
-
-// Resolve a bound account id to a display label using the cached account list.
-function accountLabel(id) {
-  const a = myAccounts.find(x => x.id === id);
-  return a ? (a.label || a.provider) : String(id).slice(0, 8);
-}
-
 async function revokeKey(id) {
   if (!confirm('确认吊销此 Key？此操作不可逆。')) return;
   try { await api('/api-keys/' + id, {method:'DELETE'}); loadKeys(); }
   catch(err) { alert(err.message); }
 }
 
-// Topup
+// ---- Topup ----
 async function loadTopup() {
   try {
-    const [methods, orders] = await Promise.all([
-      api('/topup/methods'), api('/topup?limit=50')
-    ]);
+    const [methods, orders] = await Promise.all([api('/topup/methods'), api('/topup?limit=50')]);
     const grid = document.getElementById('topup-methods');
     if (!methods.methods.length) {
       grid.innerHTML = '<div class="msg msg-error">运营方未配置充值方式</div>';
@@ -408,9 +502,7 @@ async function loadTopup() {
         const key = m.method + ':' + (m.network || '');
         const label = {'usdt':'USDT','wechat':'微信','alipay':'支付宝'}[m.method] || m.method;
         return `<div class="method-card" data-key="${esc(key)}" data-method="${esc(m.method)}" data-network="${esc(m.network||'')}" onclick="selectMethod(this)">
-          <div class="name">${label}${m.network ? ' ' + esc(m.network) : ''}</div>
-          <div class="currency">${esc(m.currency)}</div>
-        </div>`;
+          <div class="name">${label}${m.network ? ' ' + esc(m.network) : ''}</div><div class="currency">${esc(m.currency)}</div></div>`;
       }).join('');
     }
     selectedMethod = null;
@@ -419,7 +511,6 @@ async function loadTopup() {
     renderTopupOrders(orders.orders);
   } catch(err) { if (err.status === 401) doLogout(); }
 }
-
 function selectMethod(el) {
   document.querySelectorAll('.method-card').forEach(c => c.classList.remove('selected'));
   el.classList.add('selected');
@@ -427,77 +518,55 @@ function selectMethod(el) {
   document.getElementById('topup-form').classList.remove('hidden');
   document.getElementById('topup-order-detail').classList.add('hidden');
 }
-
 async function createTopup() {
   if (!selectedMethod) return;
   const amount = parseFloat(document.getElementById('topup-amount').value);
   if (!amount || amount <= 0) return alert('请输入有效金额');
   try {
-    const r = await api('/topup', {method:'POST', body: JSON.stringify({
-      amount, method: selectedMethod.method, network: selectedMethod.network
-    })});
-    showOrderDetail(r);
-    loadTopup();
+    const r = await api('/topup', {method:'POST', body: JSON.stringify({amount, method: selectedMethod.method, network: selectedMethod.network})});
+    showOrderDetail(r); loadTopup();
   } catch(err) { alert(err.message); }
 }
-
 function showOrderDetail(o) {
   const detail = document.getElementById('topup-order-detail');
   detail.classList.remove('hidden');
-  let html = `<h3 style="margin-bottom:.75rem">订单 ${esc(o.id).slice(0,8)}...</h3>
-    <p><strong>请支付：</strong><span style="font-size:1.3rem;font-weight:700;color:var(--primary)">${esc(o.amount)} ${esc(o.currency)}</span></p>
-    <p style="color:var(--danger);font-size:.85rem;margin:.5rem 0">请务必按此精确金额支付</p>`;
-  if (o.wallet_address && !o.wallet_address.startsWith('http')) {
-    html += `<div class="copy-wrap"><strong>地址：</strong><code id="order-addr">${esc(o.wallet_address)}</code>
-      <button class="btn btn-sm btn-primary" onclick="copyText('order-addr')">复制</button></div>`;
-  }
-  if (o.qr_code_url) {
-    html += `<img class="qr-img" src="${esc(o.qr_code_url)}" alt="收款码">`;
-  }
-  if (o.notes) html += `<p style="font-size:.85rem;color:var(--muted);margin-top:.5rem">${esc(o.notes)}</p>`;
-  if (o.method === 'usdt' && o.status === 'pending') {
-    html += `<div style="margin-top:1rem"><label style="font-size:.85rem;font-weight:500">提交 TX Hash：</label>
-      <div class="copy-wrap" style="margin-top:.25rem">
-        <input id="submit-txhash" placeholder="粘贴交易哈希" style="flex:1;padding:.4rem .6rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem">
-        <button class="btn btn-sm btn-success" onclick="submitTxHash('${o.id}')">提交</button>
-      </div></div>`;
-  }
-  html += `<p style="margin-top:.5rem;font-size:.8rem;color:var(--muted)">状态：${statusBadge(o.status)}</p>`;
+  let html = `<h3>订单 ${esc(o.id).slice(0,8)}…</h3>
+    <p><strong>请支付：</strong><span style="font-size:1.3rem;font-weight:800;color:var(--accent-2)">${esc(o.amount)} ${esc(o.currency)}</span></p>
+    <p style="color:#fb7185;font-size:.85rem;margin:.5rem 0">请务必按此精确金额支付</p>`;
+  if (o.wallet_address && !o.wallet_address.startsWith('http'))
+    html += `<div class="copy-wrap"><code id="order-addr">${esc(o.wallet_address)}</code><button class="btn btn-sm btn-primary" onclick="copyText('order-addr')">复制</button></div>`;
+  if (o.qr_code_url) html += `<img class="qr-img" src="${esc(o.qr_code_url)}" alt="收款码">`;
+  if (o.notes) html += `<p class="hint">${esc(o.notes)}</p>`;
+  if (o.method === 'usdt' && o.status === 'pending')
+    html += `<div style="margin-top:1rem"><label class="field-label">提交 TX Hash</label>
+      <div class="copy-wrap"><input id="submit-txhash" placeholder="粘贴交易哈希">
+      <button class="btn btn-sm btn-success" onclick="submitTxHash('${o.id}')">提交</button></div></div>`;
+  html += `<p style="margin-top:.6rem;font-size:.85rem">状态：${statusBadge(o.status)}</p>`;
   detail.innerHTML = html;
 }
-
 async function submitTxHash(id) {
   const hash = document.getElementById('submit-txhash').value.trim();
   if (!hash) return alert('请输入 TX Hash');
   try { await api('/topup/' + id + '/submit', {method:'POST', body:JSON.stringify({tx_hash:hash})}); alert('已提交，等待确认'); loadTopup(); }
   catch(err) { alert(err.message); }
 }
-
 async function cancelOrder(id) {
   if (!confirm('确认取消此订单？')) return;
-  try { await api('/topup/' + id + '/cancel', {method:'POST'}); loadTopup(); }
-  catch(err) { alert(err.message); }
+  try { await api('/topup/' + id + '/cancel', {method:'POST'}); loadTopup(); } catch(err) { alert(err.message); }
 }
-
 function renderTopupOrders(orders) {
   const tbody = document.getElementById('topup-list');
   tbody.innerHTML = orders.length ? orders.map(o => `<tr>
-    <td>${fmtTime(o.created_at)}</td>
-    <td>${esc(o.method)}${o.network ? ' ' + esc(o.network) : ''}</td>
-    <td>${esc(o.amount)} ${esc(o.currency)}</td>
-    <td>${statusBadge(o.status)}</td>
-    <td>${o.status === 'pending' || o.status === 'submitted' ?
-      `<button class="btn btn-sm" onclick="viewOrder('${o.id}')">查看</button>
+    <td>${fmtTime(o.created_at)}</td><td>${esc(o.method)}${o.network ? ' ' + esc(o.network) : ''}</td>
+    <td>${esc(o.amount)} ${esc(o.currency)}</td><td>${statusBadge(o.status)}</td>
+    <td style="text-align:right">${o.status === 'pending' || o.status === 'submitted' ?
+      `<button class="btn btn-sm btn-ghost" onclick="viewOrder('${o.id}')">查看</button>
        <button class="btn btn-danger btn-sm" onclick="cancelOrder('${o.id}')">取消</button>` : ''}</td>
-  </tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--muted)">暂无记录</td></tr>';
+  </tr>`).join('') : '<tr><td colspan="5" class="empty">暂无记录</td></tr>';
 }
+async function viewOrder(id) { try { showOrderDetail(await api('/topup/' + id)); } catch(err) { alert(err.message); } }
 
-async function viewOrder(id) {
-  try { const o = await api('/topup/' + id); showOrderDetail(o); }
-  catch(err) { alert(err.message); }
-}
-
-// Usage
+// ---- Usage ----
 async function loadUsage(reset) {
   if (reset) { usageCursor = ''; document.getElementById('usage-list').innerHTML = ''; }
   try {
@@ -506,46 +575,57 @@ async function loadUsage(reset) {
     const r = await api(url);
     const tbody = document.getElementById('usage-list');
     if (!r.records.length) {
-      if (reset) tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--muted)">暂无记录</td></tr>';
-      document.getElementById('usage-more').classList.add('hidden');
-      return;
+      if (reset) tbody.innerHTML = '<tr><td colspan="10" class="empty">暂无记录</td></tr>';
+      document.getElementById('usage-more').classList.add('hidden'); return;
     }
     document.getElementById('usage-more').classList.remove('hidden');
     tbody.innerHTML += r.records.map(u => `<tr>
       <td>${fmtTime(u.created_at)}</td><td>${esc(u.provider)}</td><td>${esc(u.model)}</td>
       <td>${esc(u.auth_label || u.auth_id || '-')}</td>
-      <td>${u.input_tokens}</td><td>${u.output_tokens}</td>
-      <td>${u.cache_read_tokens}</td><td>${u.cache_write_tokens}</td>
-      <td>${parseFloat(u.cost).toFixed(4)}</td><td>${statusBadge(u.status)}</td>
-    </tr>`).join('');
+      <td>${u.input_tokens}</td><td>${u.output_tokens}</td><td>${u.cache_read_tokens}</td><td>${u.cache_write_tokens}</td>
+      <td>${parseFloat(u.cost).toFixed(4)}</td><td>${statusBadge(u.status)}</td></tr>`).join('');
     usageCursor = r.records[r.records.length - 1].created_at;
     if (r.records.length < 50) document.getElementById('usage-more').classList.add('hidden');
   } catch(err) { if (err.status === 401) doLogout(); }
 }
 function loadMoreUsage() { loadUsage(false); }
 
-// Helpers
-function fmtTime(s) {
-  if (!s) return '-';
-  const d = new Date(s);
-  const pad = n => String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-function statusBadge(s) {
-  const m = {success:'badge-green',active:'badge-green',pending:'badge-yellow',submitted:'badge-blue',confirmed:'badge-green',error:'badge-red',cancelled:'badge-gray',expired:'badge-gray',revoked:'badge-red'};
-  return `<span class="badge ${m[s]||'badge-gray'}">${esc(s)}</span>`;
-}
-function copyText(id) {
-  const el = document.getElementById(id);
-  const text = el.textContent || el.value;
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = el.parentElement.querySelector('.btn');
-    if (btn) { const orig = btn.textContent; btn.textContent = '已复制'; setTimeout(() => btn.textContent = orig, 1500); }
-  });
+async function loadUsageStats() {
+  try {
+    const r = await api('/usage/stats?days=30');
+    const container = document.getElementById('usage-charts');
+    container.innerHTML = '';
+    if (r.daily && r.daily.length > 0) {
+      const maxCost = Math.max(...r.daily.map(d => parseFloat(d.cost)), 0.001);
+      const barW = Math.max(4, Math.floor(500 / r.daily.length) - 2), chartH = 120;
+      const bars = r.daily.map((d, i) => {
+        const h = Math.max(1, (parseFloat(d.cost) / maxCost) * (chartH - 20));
+        return `<rect x="${i*(barW+2)}" y="${chartH-h}" width="${barW}" height="${h}" fill="url(#g)" rx="2"><title>${d.date}: ${parseFloat(d.cost).toFixed(4)}</title></rect>`;
+      }).join('');
+      container.innerHTML += `<div class="stat-card" style="grid-column:span 2;min-width:300px">
+        <div class="label">近 30 天日消费</div>
+        <div style="overflow-x:auto;margin-top:.5rem"><svg width="${r.daily.length*(barW+2)}" height="${chartH}" style="display:block">
+          <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs>${bars}</svg></div>
+        <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted);margin-top:.25rem">
+          <span>${r.daily[0]?.date?.slice(5)||''}</span><span>${r.daily[r.daily.length-1]?.date?.slice(5)||''}</span></div></div>`;
+    }
+    if (r.by_model && r.by_model.length > 0) {
+      const total = r.by_model.reduce((s, m) => s + parseFloat(m.cost), 0) || 1;
+      const colors = ['#6366f1','#22c55e','#f59e0b','#f43f5e','#a855f7','#06b6d4','#f97316','#ec4899'];
+      let html = '<div class="label">模型分布 (近 30 天)</div><div style="margin-top:.5rem">';
+      r.by_model.forEach((m, i) => {
+        const pct = (parseFloat(m.cost) / total * 100).toFixed(1);
+        html += `<div style="display:flex;align-items:center;gap:.5rem;margin:.35rem 0;font-size:.82rem">
+          <span style="width:9px;height:9px;border-radius:50%;background:${colors[i%colors.length]};flex-shrink:0"></span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(m.model)}</span>
+          <span class="muted">${pct}%</span><span style="font-weight:700">${parseFloat(m.cost).toFixed(4)}</span></div>`;
+      });
+      container.innerHTML += `<div class="stat-card" style="min-width:220px">${html}</div></div>`;
+    }
+  } catch(err) { /* non-critical */ }
 }
 
-// Change password
+// ---- Settings ----
 async function doChangePassword(e) {
   e.preventDefault();
   try {
@@ -554,100 +634,46 @@ async function doChangePassword(e) {
       new_password: document.getElementById('pw-new').value
     })});
     document.getElementById('pw-msg').innerHTML = '<div class="msg msg-ok">密码已修改</div>';
-    document.getElementById('pw-old').value = '';
-    document.getElementById('pw-new').value = '';
+    document.getElementById('pw-old').value = ''; document.getElementById('pw-new').value = '';
   } catch(err) { document.getElementById('pw-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
 }
 
-// Usage stats
-async function loadUsageStats() {
-  try {
-    const r = await api('/usage/stats?days=30');
-    const container = document.getElementById('usage-charts');
-    container.innerHTML = '';
-    // Daily cost chart (simple bar chart via inline SVG)
-    if (r.daily && r.daily.length > 0) {
-      const maxCost = Math.max(...r.daily.map(d => parseFloat(d.cost)), 0.001);
-      const barW = Math.max(4, Math.floor(500 / r.daily.length) - 2);
-      const chartH = 120;
-      let bars = r.daily.map((d, i) => {
-        const h = Math.max(1, (parseFloat(d.cost) / maxCost) * (chartH - 20));
-        const x = i * (barW + 2);
-        return `<rect x="${x}" y="${chartH - h}" width="${barW}" height="${h}" fill="var(--primary)" rx="2"><title>${d.date}: ${parseFloat(d.cost).toFixed(4)}</title></rect>`;
-      }).join('');
-      const svgW = r.daily.length * (barW + 2);
-      container.innerHTML += `<div class="stat-card" style="flex:2;min-width:300px">
-        <div class="label">近30天日消费</div>
-        <div style="overflow-x:auto;margin-top:.5rem">
-          <svg width="${svgW}" height="${chartH}" style="display:block">${bars}</svg>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted);margin-top:.25rem">
-          <span>${r.daily[0]?.date?.slice(5)||''}</span><span>${r.daily[r.daily.length-1]?.date?.slice(5)||''}</span>
-        </div>
-      </div>`;
-    }
-    // Model breakdown
-    if (r.by_model && r.by_model.length > 0) {
-      const totalCost = r.by_model.reduce((s, m) => s + parseFloat(m.cost), 0) || 1;
-      const colors = ['#4f46e5','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316','#ec4899'];
-      let html = '<div class="label">模型分布 (近30天)</div><div style="margin-top:.5rem">';
-      r.by_model.forEach((m, i) => {
-        const pct = (parseFloat(m.cost) / totalCost * 100).toFixed(1);
-        html += `<div style="display:flex;align-items:center;gap:.5rem;margin:.25rem 0;font-size:.8rem">
-          <span style="width:10px;height:10px;border-radius:50%;background:${colors[i%colors.length]};flex-shrink:0"></span>
-          <span style="flex:1">${esc(m.model)}</span>
-          <span style="color:var(--muted)">${pct}%</span>
-          <span style="font-weight:600">${parseFloat(m.cost).toFixed(4)}</span>
-        </div>`;
-      });
-      html += '</div>';
-      container.innerHTML += `<div class="stat-card" style="min-width:200px">${html}</div>`;
-    }
-  } catch(err) { /* stats are non-critical */ }
-}
-
-// Admin
-let isAdmin = false;
+// ---- Admin ----
 async function loadAdmin() {
   if (!isAdmin) return;
   try {
-    const [ordersR, usersR] = await Promise.all([
-      api('/admin/topup?limit=100'), api('/admin/users')
-    ]);
-    const oTbody = document.getElementById('admin-orders');
-    const activeOrders = ordersR.orders.filter(o => o.status === 'pending' || o.status === 'submitted');
-    oTbody.innerHTML = activeOrders.length ? activeOrders.map(o => `<tr>
-      <td>${fmtTime(o.created_at)}</td><td>${esc(o.user_id).slice(0,8)}...</td>
-      <td>${esc(o.method)}${o.network ? ' '+esc(o.network) : ''}</td>
-      <td>${esc(o.amount)} ${esc(o.currency)}</td>
-      <td>${o.tx_hash ? '<code>'+esc(o.tx_hash).slice(0,16)+'...</code>' : '-'}</td>
-      <td>${statusBadge(o.status)}</td>
-      <td><button class="btn btn-success btn-sm" onclick="adminConfirm('${o.id}')">确认</button></td>
-    </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--muted)">无待确认订单</td></tr>';
+    const [ordersR, usersR] = await Promise.all([api('/admin/topup?limit=100'), api('/admin/users')]);
+    const active = ordersR.orders.filter(o => o.status === 'pending' || o.status === 'submitted');
+    document.getElementById('admin-orders').innerHTML = active.length ? active.map(o => `<tr>
+      <td>${fmtTime(o.created_at)}</td><td><code>${esc(o.user_id).slice(0,8)}…</code></td>
+      <td>${esc(o.method)}${o.network ? ' '+esc(o.network) : ''}</td><td>${esc(o.amount)} ${esc(o.currency)}</td>
+      <td>${o.tx_hash ? '<code>'+esc(o.tx_hash).slice(0,16)+'…</code>' : '-'}</td><td>${statusBadge(o.status)}</td>
+      <td style="text-align:right"><button class="btn btn-success btn-sm" onclick="adminConfirm('${o.id}')">确认</button></td>
+    </tr>`).join('') : '<tr><td colspan="7" class="empty">无待确认订单</td></tr>';
 
-    const uTbody = document.getElementById('admin-users');
-    uTbody.innerHTML = usersR.users.map(u => `<tr>
-      <td>${esc(u.email)}</td><td>${esc(u.display_name||'-')}</td>
+    adminUsers = usersR.users;
+    document.getElementById('admin-users').innerHTML = adminUsers.map(u => `<tr>
+      <td>${esc(u.email)}${u.is_admin?' <span class="badge badge-violet">admin</span>':''}</td>
       <td>${parseFloat(u.balance||'0').toFixed(2)}</td>
-      <td>${u.is_privileged ? '<span class="badge badge-green">是</span>' : '<span class="badge badge-gray">否</span>'}</td>
+      <td>${u.unbilled ? '<span class="badge badge-violet">免余额</span>' : '<span class="badge badge-gray">计费</span>'}</td>
+      <td>${limitSummary(u)}</td>
       <td>${fmtTime(u.created_at)}</td>
-      <td><button class="btn btn-sm" onclick="document.getElementById('credit-uid').value='${u.id}'">选中</button>
-        <button class="btn btn-sm" onclick="togglePrivileged('${u.id}', ${u.is_privileged ? 'false' : 'true'})">${u.is_privileged ? '取消特权' : '设为特权'}</button></td>
+      <td style="text-align:right">
+        <button class="btn btn-sm btn-ghost" onclick="openUserModal('${u.id}')">管理</button>
+        <button class="btn btn-sm" onclick="document.getElementById('credit-uid').value='${u.id}'">选中</button></td>
     </tr>`).join('');
-  } catch(err) { if (err.status === 403) { isAdmin = false; } }
+  } catch(err) { if (err.status === 403) isAdmin = false; }
 }
-
-async function togglePrivileged(id, val) {
-  try { await api('/admin/users/' + id + '/privileged', {method:'POST', body: JSON.stringify({privileged: val})}); loadAdmin(); }
-  catch(err) { alert(err.message); }
+function limitSummary(u) {
+  const m = (u.allowed_models||[]).length, a = (u.allowed_auth_ids||[]).length;
+  if (m) return `<span class="badge badge-blue">${m} 个模型</span>`;
+  if (a) return `<span class="badge badge-blue">${a} 个账号</span>`;
+  return '<span class="muted">全部</span>';
 }
-
 async function adminConfirm(id) {
   if (!confirm('确认此充值订单？将立即给用户加余额。')) return;
-  try { await api('/admin/topup/' + id + '/confirm', {method:'POST', body:'{}'}); alert('已确认'); loadAdmin(); }
-  catch(err) { alert(err.message); }
+  try { await api('/admin/topup/' + id + '/confirm', {method:'POST', body:'{}'}); loadAdmin(); } catch(err) { alert(err.message); }
 }
-
 async function doAdminCredit() {
   const uid = document.getElementById('credit-uid').value.trim();
   const amount = parseFloat(document.getElementById('credit-amount').value);
@@ -655,14 +681,81 @@ async function doAdminCredit() {
   if (!uid || !amount) return alert('请填写用户 ID 和金额');
   try {
     const r = await api('/admin/credit', {method:'POST', body:JSON.stringify({user_id:uid, amount, note})});
-    document.getElementById('credit-msg').innerHTML = `<div class="msg msg-ok">充值成功，新余额: ${r.balance}</div>`;
+    document.getElementById('credit-msg').innerHTML = `<div class="msg msg-ok">已更新，新余额：${r.balance}</div>`;
     loadAdmin();
   } catch(err) { document.getElementById('credit-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
 }
 
-// Init
+// ---- Admin: per-user limits modal ----
+async function openUserModal(id) {
+  const u = adminUsers.find(x => x.id === id);
+  if (!u) return;
+  editingUserId = id;
+  document.getElementById('um-email').textContent = u.email;
+  document.getElementById('um-unbilled').checked = !!u.unbilled;
+  document.getElementById('um-msg').innerHTML = '';
+  umTab('models');
+  // Load the pickers once (models + accounts), then check the user's current sets.
+  try {
+    if (!allModels.length) allModels = (await api('/admin/models')).models || [];
+    if (!allAccounts.length) allAccounts = (await api('/admin/accounts')).accounts || [];
+  } catch(e) {}
+  const selM = new Set(u.allowed_models || []), selA = new Set(u.allowed_auth_ids || []);
+  document.getElementById('um-model-search').value = '';
+  document.getElementById('um-model-list').innerHTML = allModels.length ? allModels.map(m =>
+    `<label class="picker-item" data-name="${esc(m.toLowerCase())}"><input type="checkbox" value="${esc(m)}" ${selM.has(m)?'checked':''}><span>${esc(m)}</span></label>`
+  ).join('') : '<div class="empty">暂无模型（先在管理控制台添加上游账号）</div>';
+  document.getElementById('um-account-list').innerHTML = allAccounts.length ? allAccounts.map(a =>
+    `<label class="picker-item"><input type="checkbox" value="${esc(a.id)}" ${selA.has(a.id)?'checked':''}>
+     <span>${esc(a.label||a.id)} <span class="muted">· ${esc(a.provider)}${a.status&&a.status!=='active'?' ('+esc(a.status)+')':''}</span></span></label>`
+  ).join('') : '<div class="empty">暂无上游账号</div>';
+  document.getElementById('user-modal').classList.remove('hidden');
+}
+function closeUserModal() { document.getElementById('user-modal').classList.add('hidden'); editingUserId = null; }
+function umTab(which) {
+  document.querySelectorAll('.tab-sm').forEach(t => t.classList.toggle('active', t.dataset.tab === which));
+  document.getElementById('um-pane-models').classList.toggle('hidden', which !== 'models');
+  document.getElementById('um-pane-accounts').classList.toggle('hidden', which !== 'accounts');
+}
+function filterModels(q) {
+  q = q.trim().toLowerCase();
+  document.querySelectorAll('#um-model-list .picker-item').forEach(el =>
+    el.style.display = (!q || el.dataset.name.includes(q)) ? '' : 'none');
+}
+async function saveUserLimits() {
+  if (!editingUserId) return;
+  const models = [...document.querySelectorAll('#um-model-list input:checked')].map(i => i.value);
+  const accounts = [...document.querySelectorAll('#um-account-list input:checked')].map(i => i.value);
+  const unbilled = document.getElementById('um-unbilled').checked;
+  try {
+    await api('/admin/users/' + editingUserId + '/limits', {method:'POST',
+      body: JSON.stringify({unbilled, allowed_models: models, allowed_auth_ids: accounts})});
+    closeUserModal(); loadAdmin();
+  } catch(err) { document.getElementById('um-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
+}
+
+// ---- Helpers ----
+function fmtTime(s) {
+  if (!s) return '-';
+  const d = new Date(s), pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function esc(s) { if (s === 0) return '0'; if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function statusBadge(s) {
+  const m = {success:'badge-green',active:'badge-green',pending:'badge-yellow',submitted:'badge-blue',confirmed:'badge-green',error:'badge-red',cancelled:'badge-gray',expired:'badge-gray',revoked:'badge-red'};
+  return `<span class="badge ${m[s]||'badge-gray'}">${esc(s)}</span>`;
+}
+function copyText(id) {
+  const el = document.getElementById(id), text = el.textContent || el.value;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = el.parentElement.querySelector('.btn');
+    if (btn) { const o = btn.textContent; btn.textContent = '已复制'; setTimeout(() => btn.textContent = o, 1500); }
+  });
+}
+
+// ---- Init ----
 if (token) {
-  api('/me').then(() => enterApp()).catch(() => { token = null; localStorage.removeItem('portal_token'); });
+  api('/me').then(() => enterApp()).catch(() => { token = null; localStorage.removeItem('portal_token'); document.getElementById('page-auth').classList.remove('hidden'); });
 } else {
   document.getElementById('page-auth').classList.remove('hidden');
 }

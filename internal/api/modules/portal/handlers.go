@@ -31,19 +31,6 @@ type changePasswordRequest struct {
 
 type createKeyRequest struct {
 	Name string `json:"name"`
-	// BoundAuthIDs restricts the key to a set of upstream account IDs.
-	// Unbilled exempts the key from wallet balance/debit. Both are independent
-	// and require a privileged user to set; ignored/rejected otherwise.
-	BoundAuthIDs []string `json:"bound_auth_ids"`
-	Unbilled     bool     `json:"unbilled"`
-}
-
-type bindAccountsRequest struct {
-	BoundAuthIDs []string `json:"bound_auth_ids"`
-}
-
-type unbilledRequest struct {
-	Unbilled bool `json:"unbilled"`
 }
 
 func (m *Module) handleRegister(c *gin.Context) {
@@ -205,37 +192,17 @@ func (m *Module) handleListKeys(c *gin.Context) {
 func (m *Module) handleCreateKey(c *gin.Context) {
 	userID := userIDFromGin(c)
 	var req createKeyRequest
-	_ = c.ShouldBindJSON(&req) // fields are optional
+	_ = c.ShouldBindJSON(&req) // name is optional
 
-	// Account binding and unbilled are both privileged-only capabilities and
-	// are independent of each other. A non-privileged user requesting either
-	// is rejected.
-	var bound []string
-	if len(req.BoundAuthIDs) > 0 || req.Unbilled {
-		user, err := m.store.GetUserByID(c.Request.Context(), userID)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
-			return
-		}
-		if !user.IsPrivileged {
-			c.JSON(http.StatusForbidden, gin.H{"error": "account binding / unbilled keys require a privileged account"})
-			return
-		}
-		if len(req.BoundAuthIDs) > 0 {
-			bound = billing.ValidAccountIDs(req.BoundAuthIDs)
-			if len(bound) == 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "no valid upstream accounts in bound_auth_ids"})
-				return
-			}
-		}
-	}
-
+	// Per-user access controls (unbilled / allowed models / allowed accounts)
+	// live on the user and are managed by the super admin, so key creation is
+	// a plain operation available to every user.
 	raw, err := m.keyGen()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate key failed"})
 		return
 	}
-	rec, err := m.store.CreateAPIKey(c.Request.Context(), userID, store.HashAPIKey(raw), keyPrefix(raw), req.Name, bound, req.Unbilled)
+	rec, err := m.store.CreateAPIKey(c.Request.Context(), userID, store.HashAPIKey(raw), keyPrefix(raw), req.Name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "create key failed"})
 		return
@@ -243,87 +210,6 @@ func (m *Module) handleCreateKey(c *gin.Context) {
 	view := apiKeyView(rec)
 	view["key"] = raw // returned only on creation
 	c.JSON(http.StatusCreated, view)
-}
-
-// handleBindKeyAccounts replaces the set of upstream accounts a key is bound
-// to. Privileged users only. An empty list clears the binding.
-func (m *Module) handleBindKeyAccounts(c *gin.Context) {
-	userID := userIDFromGin(c)
-	keyID := c.Param("id")
-	var req bindAccountsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	user, err := m.store.GetUserByID(c.Request.Context(), userID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
-		return
-	}
-	if !user.IsPrivileged {
-		c.JSON(http.StatusForbidden, gin.H{"error": "account binding requires a privileged account"})
-		return
-	}
-	bound := billing.ValidAccountIDs(req.BoundAuthIDs)
-	if err := m.store.SetAPIKeyBoundAuths(c.Request.Context(), userID, keyID, bound); err != nil {
-		if errors.Is(err, store.ErrAPIKeyNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "bind accounts failed"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"bound_auth_ids": bound})
-}
-
-// handleSetKeyUnbilled toggles a key's wallet-exemption flag. Privileged
-// users only.
-func (m *Module) handleSetKeyUnbilled(c *gin.Context) {
-	userID := userIDFromGin(c)
-	keyID := c.Param("id")
-	var req unbilledRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	user, err := m.store.GetUserByID(c.Request.Context(), userID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
-		return
-	}
-	if !user.IsPrivileged {
-		c.JSON(http.StatusForbidden, gin.H{"error": "unbilled keys require a privileged account"})
-		return
-	}
-	if err := m.store.SetAPIKeyUnbilled(c.Request.Context(), userID, keyID, req.Unbilled); err != nil {
-		if errors.Is(err, store.ErrAPIKeyNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "update unbilled failed"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"unbilled": req.Unbilled})
-}
-
-// handleListAccounts returns the upstream accounts available for binding.
-// Privileged users only.
-func (m *Module) handleListAccounts(c *gin.Context) {
-	userID := userIDFromGin(c)
-	user, err := m.store.GetUserByID(c.Request.Context(), userID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
-		return
-	}
-	if !user.IsPrivileged {
-		c.JSON(http.StatusForbidden, gin.H{"error": "privileged account required"})
-		return
-	}
-	accounts := billing.Accounts()
-	if accounts == nil {
-		accounts = []billing.Account{}
-	}
-	c.JSON(http.StatusOK, gin.H{"accounts": accounts})
 }
 
 func (m *Module) handleRevokeKey(c *gin.Context) {
@@ -341,31 +227,35 @@ func (m *Module) handleRevokeKey(c *gin.Context) {
 }
 
 func userView(u store.User) gin.H {
+	models := u.AllowedModels
+	if models == nil {
+		models = []string{}
+	}
+	auths := u.AllowedAuthIDs
+	if auths == nil {
+		auths = []string{}
+	}
 	return gin.H{
-		"id":            u.ID,
-		"email":         u.Email,
-		"display_name":  u.DisplayName,
-		"status":        u.Status,
-		"is_admin":      u.IsAdmin,
-		"is_privileged": u.IsPrivileged,
-		"created_at":    u.CreatedAt,
+		"id":               u.ID,
+		"email":            u.Email,
+		"display_name":     u.DisplayName,
+		"status":           u.Status,
+		"is_admin":         u.IsAdmin,
+		"unbilled":         u.Unbilled,
+		"allowed_models":   models,
+		"allowed_auth_ids": auths,
+		"created_at":       u.CreatedAt,
 	}
 }
 
 func apiKeyView(k store.APIKeyRecord) gin.H {
-	bound := k.BoundAuthIDs
-	if bound == nil {
-		bound = []string{}
-	}
 	return gin.H{
-		"id":             k.ID,
-		"name":           k.Name,
-		"key_prefix":     k.KeyPrefix,
-		"bound_auth_ids": bound,
-		"unbilled":       k.Unbilled,
-		"created_at":     k.CreatedAt,
-		"last_used_at":   nullableTime(k.LastUsedAt),
-		"revoked_at":     nullableTime(k.RevokedAt),
+		"id":           k.ID,
+		"name":         k.Name,
+		"key_prefix":   k.KeyPrefix,
+		"created_at":   k.CreatedAt,
+		"last_used_at": nullableTime(k.LastUsedAt),
+		"revoked_at":   nullableTime(k.RevokedAt),
 	}
 }
 
