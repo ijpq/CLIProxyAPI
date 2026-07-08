@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
 )
 
@@ -16,8 +17,10 @@ type adminCreditRequest struct {
 	Note   string  `json:"note"`
 }
 
-type adminPrivilegedRequest struct {
-	Privileged bool `json:"privileged"`
+type adminLimitsRequest struct {
+	Unbilled       bool     `json:"unbilled"`
+	AllowedModels  []string `json:"allowed_models"`
+	AllowedAuthIDs []string `json:"allowed_auth_ids"`
 }
 
 func (m *Module) handleAdminListUsers(c *gin.Context) {
@@ -35,16 +38,9 @@ func (m *Module) handleAdminListUsers(c *gin.Context) {
 	out := make([]gin.H, 0, len(users))
 	for _, u := range users {
 		bal, _ := m.store.GetWalletBalance(c.Request.Context(), u.ID)
-		out = append(out, gin.H{
-			"id":            u.ID,
-			"email":         u.Email,
-			"display_name":  u.DisplayName,
-			"status":        u.Status,
-			"is_admin":      u.IsAdmin,
-			"is_privileged": u.IsPrivileged,
-			"balance":       bal,
-			"created_at":    u.CreatedAt,
-		})
+		v := userView(u)
+		v["balance"] = bal
+		out = append(out, v)
 	}
 	c.JSON(http.StatusOK, gin.H{"users": out})
 }
@@ -68,24 +64,52 @@ func (m *Module) handleAdminCredit(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"balance": newBalance})
 }
 
-// handleAdminSetPrivileged toggles the is_privileged flag for a user.
-func (m *Module) handleAdminSetPrivileged(c *gin.Context) {
+// handleAdminSetUserLimits sets the per-user access controls (unbilled +
+// allowed models + allowed upstream accounts). Super admin only.
+func (m *Module) handleAdminSetUserLimits(c *gin.Context) {
 	userID := c.Param("id")
-	var req adminPrivilegedRequest
+	var req adminLimitsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := m.store.SetUserPrivileged(c.Request.Context(), userID, req.Privileged); err != nil {
+	models := billing.ValidModels(req.AllowedModels)
+	auths := billing.ValidAccountIDs(req.AllowedAuthIDs)
+	if err := m.store.SetUserLimits(c.Request.Context(), userID, req.Unbilled, models, auths); err != nil {
 		if errors.Is(err, store.ErrUserNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "update privileged failed"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update limits failed"})
 		return
 	}
-	m.notify(c.Request.Context(), fmt.Sprintf("🔑 特权变更: 用户 %s, privileged=%t", userID, req.Privileged))
-	c.JSON(http.StatusOK, gin.H{"id": userID, "is_privileged": req.Privileged})
+	m.notify(c.Request.Context(), fmt.Sprintf("🔧 权限更新: 用户 %s (unbilled=%t, models=%d, accounts=%d)", userID, req.Unbilled, len(models), len(auths)))
+	c.JSON(http.StatusOK, gin.H{
+		"id":               userID,
+		"unbilled":         req.Unbilled,
+		"allowed_models":   models,
+		"allowed_auth_ids": auths,
+	})
+}
+
+// handleAdminListModels returns every client-visible model name for the admin's
+// per-user model whitelist picker.
+func (m *Module) handleAdminListModels(c *gin.Context) {
+	models := billing.Models()
+	if models == nil {
+		models = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{"models": models})
+}
+
+// handleAdminListAccounts returns every upstream account for the admin's
+// per-user account whitelist picker.
+func (m *Module) handleAdminListAccounts(c *gin.Context) {
+	accounts := billing.Accounts()
+	if accounts == nil {
+		accounts = []billing.Account{}
+	}
+	c.JSON(http.StatusOK, gin.H{"accounts": accounts})
 }
 
 func (m *Module) handleUsageStats(c *gin.Context) {
