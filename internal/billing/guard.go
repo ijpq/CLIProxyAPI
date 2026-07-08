@@ -57,9 +57,9 @@ func (g *BalanceGuard) Handler() gin.HandlerFunc {
 		if userID == "" {
 			return
 		}
-		// Privileged users bypass balance enforcement entirely; their usage is
+		// Unbilled keys bypass balance enforcement entirely; their usage is
 		// still metered for audit but never blocks on balance.
-		if PrivilegedFromContext(c.Request.Context()) {
+		if UnbilledFromContext(c.Request.Context()) {
 			return
 		}
 		bal, err := g.balanceFor(c.Request.Context(), userID)
@@ -124,8 +124,8 @@ func (g *BalanceGuard) balanceFor(ctx context.Context, userID string) (float64, 
 type RateLimiter struct {
 	rate  float64 // tokens per second
 	burst float64
-	// bypassPrivileged, when true, exempts privileged users from rate limiting.
-	bypassPrivileged bool
+	// bypassUnbilled, when true, exempts unbilled keys from rate limiting.
+	bypassUnbilled bool
 
 	mu      sync.Mutex
 	buckets map[string]*tokenBucket
@@ -139,9 +139,9 @@ type tokenBucket struct {
 
 // NewRateLimiter constructs a limiter with the given refill rate and burst.
 // rate <= 0 or burst <= 0 disables limiting (returns a no-op). When
-// bypassPrivileged is true, privileged users are exempt from the limit.
-func NewRateLimiter(rate, burst float64, bypassPrivileged bool) *RateLimiter {
-	return &RateLimiter{rate: rate, burst: burst, bypassPrivileged: bypassPrivileged, buckets: make(map[string]*tokenBucket)}
+// bypassUnbilled is true, unbilled keys are exempt from the limit.
+func NewRateLimiter(rate, burst float64, bypassUnbilled bool) *RateLimiter {
+	return &RateLimiter{rate: rate, burst: burst, bypassUnbilled: bypassUnbilled, buckets: make(map[string]*tokenBucket)}
 }
 
 // Handler returns the gin middleware. Non-billing users (no user id on
@@ -155,7 +155,7 @@ func (l *RateLimiter) Handler() gin.HandlerFunc {
 		if userID == "" {
 			return
 		}
-		if l.bypassPrivileged && PrivilegedFromContext(c.Request.Context()) {
+		if l.bypassUnbilled && UnbilledFromContext(c.Request.Context()) {
 			return
 		}
 		if !l.allow(userID) {
