@@ -25,11 +25,9 @@ type Store interface {
 	CreateUser(ctx context.Context, email, passwordHash, displayName string) (store.User, error)
 	GetUserByEmail(ctx context.Context, email string) (store.User, error)
 	GetUserByID(ctx context.Context, id string) (store.User, error)
-	CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string, boundAuthIDs []string, unbilled bool) (store.APIKeyRecord, error)
+	CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string) (store.APIKeyRecord, error)
 	ListAPIKeys(ctx context.Context, userID string) ([]store.APIKeyRecord, error)
 	RevokeAPIKey(ctx context.Context, userID, keyID string) error
-	SetAPIKeyBoundAuths(ctx context.Context, userID, keyID string, boundAuthIDs []string) error
-	SetAPIKeyUnbilled(ctx context.Context, userID, keyID string, unbilled bool) error
 	GetWalletBalance(ctx context.Context, userID string) (string, error)
 	ListUsage(ctx context.Context, userID string, before time.Time, limit int) ([]store.UsageRecord, error)
 
@@ -43,7 +41,7 @@ type Store interface {
 	ConfirmTopupOrder(ctx context.Context, orderID, adminNote string) (store.TopupOrder, error)
 	ListAllUsers(ctx context.Context, limit int) ([]store.User, error)
 	AdminCreditWallet(ctx context.Context, userID, amountStr, reference, note string) (string, error)
-	SetUserPrivileged(ctx context.Context, userID string, privileged bool) error
+	SetUserLimits(ctx context.Context, userID string, unbilled bool, allowedModels, allowedAuthIDs []string) error
 	AggregateUsageByDay(ctx context.Context, userID string, days int) ([]store.DailyUsageStat, error)
 	AggregateUsageByModel(ctx context.Context, userID string, days int) ([]store.ModelUsageStat, error)
 }
@@ -110,10 +108,6 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.GET("/api-keys", m.handleListKeys)
 	authed.POST("/api-keys", m.handleCreateKey)
 	authed.DELETE("/api-keys/:id", m.handleRevokeKey)
-	authed.PUT("/api-keys/:id/accounts", m.handleBindKeyAccounts)
-	authed.PUT("/api-keys/:id/unbilled", m.handleSetKeyUnbilled)
-	// Upstream accounts available for binding (privileged users only).
-	authed.GET("/accounts", m.handleListAccounts)
 
 	authed.GET("/topup/methods", m.handleListTopupMethods)
 	authed.POST("/topup", m.handleCreateTopupOrder)
@@ -131,7 +125,10 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	admin.POST("/topup/:id/confirm", m.handleAdminConfirmTopupOrder)
 	admin.GET("/users", m.handleAdminListUsers)
 	admin.POST("/credit", m.handleAdminCredit)
-	admin.POST("/users/:id/privileged", m.handleAdminSetPrivileged)
+	// Super-admin-only: per-user access controls + pickers for the UI.
+	admin.POST("/users/:id/limits", m.handleAdminSetUserLimits)
+	admin.GET("/models", m.handleAdminListModels)
+	admin.GET("/accounts", m.handleAdminListAccounts)
 }
 
 // defaultKeyGenerator produces a 32-byte random key encoded as

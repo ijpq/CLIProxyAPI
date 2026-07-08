@@ -16,13 +16,10 @@ func (s *PostgresStore) ListAllUsers(ctx context.Context, limit int) ([]User, er
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	query := fmt.Sprintf(`
-		SELECT u.id, u.email, u.password_hash, u.display_name, u.status, u.is_admin,
-		       u.is_privileged, u.created_at, u.updated_at
-		FROM %s u
-		ORDER BY u.created_at DESC
-		LIMIT $1
-	`, s.fullTableName(BillingUsersTable))
+	query := fmt.Sprintf(
+		"SELECT %s FROM %s ORDER BY created_at DESC LIMIT $1",
+		userSelectColumns, s.fullTableName(BillingUsersTable),
+	)
 	rows, err := s.db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("postgres store: list users: %w", err)
@@ -30,8 +27,8 @@ func (s *PostgresStore) ListAllUsers(ctx context.Context, limit int) ([]User, er
 	defer func() { _ = rows.Close() }()
 	out := make([]User, 0, limit)
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin, &u.IsPrivileged, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		u, err := scanUser(rows)
+		if err != nil {
 			return nil, fmt.Errorf("postgres store: scan user: %w", err)
 		}
 		out = append(out, u)

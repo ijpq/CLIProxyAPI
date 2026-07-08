@@ -184,8 +184,11 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 				if result.Metadata[billing.MetadataKeyUnbilled] == "1" {
 					ctx = billing.WithUnbilled(ctx)
 				}
-				if bound := result.Metadata[billing.MetadataKeyBoundAuthIDs]; bound != "" {
-					ctx = billing.WithBoundAuthIDs(ctx, billing.SplitBoundAuthIDs(bound))
+				if allowed := result.Metadata[billing.MetadataKeyAllowedAuthIDs]; allowed != "" {
+					ctx = billing.WithAllowedAuthIDs(ctx, billing.SplitCSV(allowed))
+				}
+				if allowed := result.Metadata[billing.MetadataKeyAllowedModels]; allowed != "" {
+					ctx = billing.WithAllowedModels(ctx, billing.SplitCSV(allowed))
 				}
 				c.Request = c.Request.WithContext(ctx)
 			}
