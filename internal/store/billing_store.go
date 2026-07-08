@@ -15,10 +15,10 @@ import (
 type APIKeyLookup struct {
 	ID     string
 	UserID string
-	// Privileged mirrors the owning user's is_privileged flag so the access
-	// layer can decide, without a second query, whether the request may pin
-	// upstream accounts and bypass balance enforcement.
-	Privileged bool
+	// Unbilled marks the key as exempt from wallet balance/debit: usage is
+	// still recorded for audit but the wallet is not touched. Independent of
+	// BoundAuthIDs.
+	Unbilled bool
 	// BoundAuthIDs restricts this key's requests to a set of upstream account
 	// IDs. Empty means no restriction (normal scheduler behavior).
 	BoundAuthIDs []string
@@ -77,14 +77,12 @@ func (s *PostgresStore) LookupAPIKey(ctx context.Context, keyHash string) (APIKe
 	}
 
 	query := fmt.Sprintf(
-		`SELECT k.id, k.user_id, u.is_privileged, k.bound_auth_ids
-		 FROM %s k JOIN %s u ON u.id = k.user_id
-		 WHERE k.key_hash = $1 AND k.revoked_at IS NULL`,
-		s.fullTableName(BillingAPIKeysTable), s.fullTableName(BillingUsersTable),
+		`SELECT id, user_id, unbilled, bound_auth_ids FROM %s WHERE key_hash = $1 AND revoked_at IS NULL`,
+		s.fullTableName(BillingAPIKeysTable),
 	)
 	var out APIKeyLookup
 	var boundRaw string
-	err := s.db.QueryRowContext(ctx, query, keyHash).Scan(&out.ID, &out.UserID, &out.Privileged, &boundRaw)
+	err := s.db.QueryRowContext(ctx, query, keyHash).Scan(&out.ID, &out.UserID, &out.Unbilled, &boundRaw)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return APIKeyLookup{}, ErrAPIKeyNotFound

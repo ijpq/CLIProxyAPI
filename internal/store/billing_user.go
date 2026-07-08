@@ -35,6 +35,7 @@ type APIKeyRecord struct {
 	KeyPrefix    string
 	Name         string
 	BoundAuthIDs []string
+	Unbilled     bool
 	LastUsedAt   sql.NullTime
 	RevokedAt    sql.NullTime
 	CreatedAt    time.Time
@@ -172,7 +173,7 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, id string) (User, error
 
 // CreateAPIKey persists a new api_key row owned by userID. The hash and prefix
 // are computed by the caller so the plaintext key is never seen here.
-func (s *PostgresStore) CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string, boundAuthIDs []string) (APIKeyRecord, error) {
+func (s *PostgresStore) CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string, boundAuthIDs []string, unbilled bool) (APIKeyRecord, error) {
 	if s == nil || s.db == nil {
 		return APIKeyRecord{}, fmt.Errorf("postgres store: not initialized")
 	}
@@ -180,14 +181,14 @@ func (s *PostgresStore) CreateAPIKey(ctx context.Context, userID, keyHash, keyPr
 		return APIKeyRecord{}, fmt.Errorf("postgres store: user id and key hash required")
 	}
 	query := fmt.Sprintf(`
-		INSERT INTO %s (user_id, key_hash, key_prefix, name, bound_auth_ids)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, user_id, key_prefix, name, bound_auth_ids, last_used_at, revoked_at, created_at
+		INSERT INTO %s (user_id, key_hash, key_prefix, name, bound_auth_ids, unbilled)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, user_id, key_prefix, name, bound_auth_ids, unbilled, last_used_at, revoked_at, created_at
 	`, s.fullTableName(BillingAPIKeysTable))
 	var rec APIKeyRecord
 	var boundRaw string
-	err := s.db.QueryRowContext(ctx, query, userID, keyHash, keyPrefix, strings.TrimSpace(name), EncodeAuthIDs(boundAuthIDs)).Scan(
-		&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &boundRaw, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt,
+	err := s.db.QueryRowContext(ctx, query, userID, keyHash, keyPrefix, strings.TrimSpace(name), EncodeAuthIDs(boundAuthIDs), unbilled).Scan(
+		&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &boundRaw, &rec.Unbilled, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt,
 	)
 	if err != nil {
 		return APIKeyRecord{}, fmt.Errorf("postgres store: insert api key: %w", err)
@@ -203,7 +204,7 @@ func (s *PostgresStore) ListAPIKeys(ctx context.Context, userID string) ([]APIKe
 		return nil, fmt.Errorf("postgres store: not initialized")
 	}
 	query := fmt.Sprintf(`
-		SELECT id, user_id, key_prefix, name, bound_auth_ids, last_used_at, revoked_at, created_at
+		SELECT id, user_id, key_prefix, name, bound_auth_ids, unbilled, last_used_at, revoked_at, created_at
 		FROM %s WHERE user_id = $1
 		ORDER BY created_at DESC
 	`, s.fullTableName(BillingAPIKeysTable))
@@ -216,7 +217,7 @@ func (s *PostgresStore) ListAPIKeys(ctx context.Context, userID string) ([]APIKe
 	for rows.Next() {
 		var rec APIKeyRecord
 		var boundRaw string
-		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &boundRaw, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &boundRaw, &rec.Unbilled, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt); err != nil {
 			return nil, fmt.Errorf("postgres store: scan api key: %w", err)
 		}
 		rec.BoundAuthIDs = DecodeAuthIDs(boundRaw)
@@ -422,6 +423,31 @@ func (s *PostgresStore) SetAPIKeyBoundAuths(ctx context.Context, userID, keyID s
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("postgres store: set bound auths rows: %w", err)
+	}
+	if n == 0 {
+		return ErrAPIKeyNotFound
+	}
+	return nil
+}
+
+// SetAPIKeyUnbilled toggles the wallet-exemption flag for a key owned by
+// userID. Returns ErrAPIKeyNotFound when the active key does not belong to the
+// user.
+func (s *PostgresStore) SetAPIKeyUnbilled(ctx context.Context, userID, keyID string, unbilled bool) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("postgres store: not initialized")
+	}
+	query := fmt.Sprintf(
+		"UPDATE %s SET unbilled = $3 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+		s.fullTableName(BillingAPIKeysTable),
+	)
+	res, err := s.db.ExecContext(ctx, query, keyID, userID, unbilled)
+	if err != nil {
+		return fmt.Errorf("postgres store: set unbilled: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("postgres store: set unbilled rows: %w", err)
 	}
 	if n == 0 {
 		return ErrAPIKeyNotFound
