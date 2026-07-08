@@ -90,8 +90,8 @@ func (p *provider) Authenticate(ctx context.Context, r *http.Request) (*sdkacces
 		billing.MetadataKeyUserID:   lookup.UserID,
 		billing.MetadataKeyAPIKeyID: lookup.ID,
 	}
-	if lookup.Privileged {
-		meta[billing.MetadataKeyPrivileged] = "1"
+	if lookup.Unbilled {
+		meta[billing.MetadataKeyUnbilled] = "1"
 	}
 	if len(lookup.BoundAuthIDs) > 0 {
 		meta[billing.MetadataKeyBoundAuthIDs] = store.EncodeAuthIDs(lookup.BoundAuthIDs)

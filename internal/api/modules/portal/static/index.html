@@ -141,8 +141,9 @@ tr:hover{background:#f8fafc}
         <button class="btn btn-primary btn-sm" onclick="createKey()">创建新 Key</button>
       </div>
       <div id="key-accounts-wrap" class="hidden" style="margin-bottom:1rem">
-        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.3rem">绑定上游账号（特权账号专属，可多选；多选时按 CLIProxy 的轮询/fill-first 策略在其中调度；不选=不绑定，走全部账号）</label>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.3rem">绑定上游账号（特权专属，可多选；多选时按 CLIProxy 的轮询/fill-first 策略在其中调度；不选=不绑定，走全部账号）</label>
         <select id="key-accounts" multiple size="4" style="width:100%;max-width:460px;padding:.4rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.85rem"></select>
+        <label style="display:block;margin-top:.5rem;font-size:.85rem"><input type="checkbox" id="key-unbilled"> 免余额（此 Key 不计费/不受余额限制，用量仍记录）</label>
       </div>
       <div id="new-key-msg"></div>
       <div class="card">
@@ -340,7 +341,7 @@ async function loadKeys() {
     const tbody = document.getElementById('keys-list');
     tbody.innerHTML = r.keys.length ? r.keys.map(k => `<tr>
       <td><code>${esc(k.key_prefix)}...</code></td><td>${esc(k.name||'-')}</td>
-      <td>${(k.bound_auth_ids&&k.bound_auth_ids.length) ? k.bound_auth_ids.map(id=>esc(accountLabel(id))).join(', ') : '<span style="color:var(--muted)">全部</span>'}</td>
+      <td>${(k.bound_auth_ids&&k.bound_auth_ids.length) ? k.bound_auth_ids.map(id=>esc(accountLabel(id))).join(', ') : '<span style="color:var(--muted)">全部</span>'}${k.unbilled ? ' <span class="badge badge-blue">免费</span>' : ''}</td>
       <td>${fmtTime(k.created_at)}</td><td>${k.last_used_at ? fmtTime(k.last_used_at) : '-'}</td>
       <td>${k.revoked_at ? '<span class="badge badge-red">已吊销</span>' : '<span class="badge badge-green">活跃</span>'}</td>
       <td>${k.revoked_at ? '' : `<button class="btn btn-danger btn-sm" onclick="revokeKey('${k.id}')">吊销</button>`}</td>
@@ -356,6 +357,7 @@ async function createKey() {
       const sel = document.getElementById('key-accounts');
       const ids = Array.from(sel.selectedOptions).map(o => o.value);
       if (ids.length) body.bound_auth_ids = ids;
+      if (document.getElementById('key-unbilled').checked) body.unbilled = true;
     }
     const r = await api('/api-keys', {method:'POST', body: JSON.stringify(body)});
     document.getElementById('new-key-msg').innerHTML = `<div class="msg msg-ok">
@@ -363,6 +365,7 @@ async function createKey() {
       <div class="copy-wrap"><code id="new-key-val">${esc(r.key)}</code>
       <button class="btn btn-sm btn-primary" onclick="copyText('new-key-val')">复制</button></div></div>`;
     document.getElementById('key-name').value = '';
+    if (document.getElementById('key-unbilled')) document.getElementById('key-unbilled').checked = false;
     loadKeys();
   } catch(err) { document.getElementById('new-key-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
 }
