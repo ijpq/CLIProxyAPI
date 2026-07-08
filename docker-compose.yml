@@ -1,7 +1,6 @@
 services:
   cli-proxy-api:
     image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}
-    pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile
@@ -10,10 +9,27 @@ services:
         COMMIT: ${COMMIT:-none}
         BUILD_DATE: ${BUILD_DATE:-unknown}
     container_name: cli-proxy-api
-    # env_file:
-    #   - .env
     environment:
       DEPLOY: ${DEPLOY:-}
+      # --- Billing / commercial portal (uses the postgres service below) ---
+      BILLING_ENABLED: ${BILLING_ENABLED:-true}
+      # REQUIRED: set this in .env (generate with: openssl rand -hex 32).
+      # Compose will refuse to start with a clear message if it is empty.
+      BILLING_JWT_SECRET: "${BILLING_JWT_SECRET:?set BILLING_JWT_SECRET in .env - run openssl rand -hex 32}"
+      # Your email; register with it in the portal, then restart to become admin.
+      BILLING_ADMIN_EMAIL: "${BILLING_ADMIN_EMAIL:-}"
+      # Connection to the postgres service below. The username/password/db name
+      # here are just repeated from that service (they already match) — you do
+      # NOT need to look anything up. Only change this if you change
+      # POSTGRES_PASSWORD below (keep the two passwords identical).
+      PGSTORE_DSN: "${PGSTORE_DSN:-postgres://cpa:change-me@postgres:5432/cpa?sslmode=disable}"
+      # Optional knobs (safe defaults; override in .env if you want)
+      BILLING_MARKUP: ${BILLING_MARKUP:-1.0}
+      BILLING_BALANCE_THRESHOLD: ${BILLING_BALANCE_THRESHOLD:-0}
+      BILLING_UNBILLED_BYPASS_RATE_LIMIT: ${BILLING_UNBILLED_BYPASS_RATE_LIMIT:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8317:8317"
       - "8085:8085"
@@ -27,3 +43,27 @@ services:
       - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
       - ${CLI_PROXY_PLUGIN_PATH:-./plugins}:/CLIProxyAPI/plugins
     restart: unless-stopped
+
+  # Self-contained database for the billing system. It is NOT published to the
+  # host (no ports:), so it is only reachable by cli-proxy-api on the internal
+  # Docker network — the default password is fine for a private server. Data
+  # persists in the pgdata volume across restarts and rebuilds. Nothing here
+  # needs manual setup: the billing tables are created automatically on start.
+  postgres:
+    image: postgres:16-alpine
+    container_name: cli-proxy-pg
+    environment:
+      POSTGRES_USER: cpa
+      POSTGRES_DB: cpa
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cpa -d cpa"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
