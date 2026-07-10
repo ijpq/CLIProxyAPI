@@ -184,6 +184,16 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.Serv
 	module.SetWalletChangeHook(balanceGuard.Invalidate)
 	module.SetNotifier(notifier)
 
+	// Passwordless email-code login (enabled only when SMTP is configured).
+	if emailSender := billing.NewEmailSenderFromEnv(); emailSender != nil {
+		ttl := parseDurationDefault(os.Getenv("BILLING_LOGIN_CODE_TTL"), 10*time.Minute)
+		cooldown := parseDurationDefault(os.Getenv("BILLING_LOGIN_CODE_COOLDOWN"), 60*time.Second)
+		module.SetEmailLogin(emailSender, billing.NewLoginCodeStore(ttl, cooldown))
+		log.Info("billing: email-code login enabled (BILLING_SMTP_HOST configured)")
+	} else {
+		log.Info("billing: email-code login disabled (set BILLING_SMTP_HOST to enable)")
+	}
+
 	startUSDTWatcher(ctx, pg, balanceGuard.Invalidate)
 	go expireOrdersLoop(pg)
 
