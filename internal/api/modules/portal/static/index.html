@@ -150,6 +150,15 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
 .qrow>span{color:var(--muted)}
 .qrow>b{font-weight:700}
 .qsub{font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:.2rem 0 .55rem}
+.qacct-actions{margin-left:auto;display:flex;gap:.4rem;flex-shrink:0}
+.qbtn{padding:.32rem .55rem;border:1px solid var(--border-2);background:var(--surface-2);color:var(--text);border-radius:8px;font-size:.76rem;font-weight:600;cursor:pointer;line-height:1.1}
+.qbtn:hover{border-color:var(--faint)}
+.qbtn:disabled{opacity:.5;cursor:default}
+.qbtn-reset{color:var(--accent-2);border-color:rgba(99,102,241,.35)}
+.qbtn-reset:hover{background:var(--accent-soft)}
+.qacct.busy{opacity:.55;pointer-events:none}
+.qacct-msg{font-size:.78rem;margin-top:.5rem}
+.qacct-msg.ok{color:#4ade80}.qacct-msg.err{color:#fb7185}
 
 /* ---------- Topup ---------- */
 .methods-grid{display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.2rem}
@@ -580,6 +589,11 @@ async function loadAccountQuota() {
 
 function renderQuotaAccount(a) {
   const badge = providerBadge(a.provider);
+  const h = esc(a.handle || '');
+  const actions = `<div class="qacct-actions">
+    <button class="qbtn" title="刷新额度" onclick="refreshAccountQuota('${h}')">↻ 刷新</button>
+    ${a.can_reset ? `<button class="qbtn qbtn-reset" title="消耗一个重置额度以立即重置限流" onclick="resetAccountCredit('${h}')">重置额度${a.reset_credits ? ' ('+a.reset_credits+')' : ''}</button>` : ''}
+  </div>`;
   let inner = '';
   if (a.error) {
     inner = `<div class="qacct-err">${esc(a.error)}</div>`;
@@ -594,7 +608,42 @@ function renderQuotaAccount(a) {
     if (a.note) inner += `<div class="qacct-note">${esc(a.note)}</div>`;
     if (!inner) inner = '<div class="qacct-note">暂无数据</div>';
   }
-  return `<div class="qacct"><div class="qacct-head">${badge}<span class="name">${esc(a.label || '账号')}</span></div>${inner}</div>`;
+  return `<div class="qacct" data-handle="${h}"><div class="qacct-head">${badge}<span class="name">${esc(a.label || '账号')}</span>${actions}</div>${inner}</div>`;
+}
+
+// Refresh a single account's live quota in place.
+async function refreshAccountQuota(handle) {
+  const card = document.querySelector(`.qacct[data-handle="${handle}"]`);
+  if (card) card.classList.add('busy');
+  try {
+    const a = await api('/quota/' + encodeURIComponent(handle));
+    if (card) card.outerHTML = renderQuotaAccount(a);
+  } catch(err) {
+    if (err.status === 401) { doLogout(); return; }
+    if (card) card.classList.remove('busy');
+  }
+}
+
+// Consume one Codex rate-limit reset credit for an account, then refresh it.
+async function resetAccountCredit(handle) {
+  if (!confirm('确认消耗一个「重置额度」来立即重置该账号的 5 小时限流？此操作不可撤销。')) return;
+  const card = document.querySelector(`.qacct[data-handle="${handle}"]`);
+  if (card) card.classList.add('busy');
+  try {
+    const a = await api('/quota/' + encodeURIComponent(handle) + '/reset', {method:'POST'});
+    if (card) {
+      card.outerHTML = renderQuotaAccount(a);
+      const fresh = document.querySelector(`.qacct[data-handle="${handle}"]`);
+      if (fresh) fresh.insertAdjacentHTML('beforeend', '<div class="qacct-msg ok">已重置</div>');
+    }
+  } catch(err) {
+    if (err.status === 401) { doLogout(); return; }
+    if (card) {
+      card.classList.remove('busy');
+      const old = card.querySelector('.qacct-msg'); if (old) old.remove();
+      card.insertAdjacentHTML('beforeend', `<div class="qacct-msg err">${esc(err.message || '重置失败')}</div>`);
+    }
+  }
 }
 
 function renderQuotaMeter(w) {
