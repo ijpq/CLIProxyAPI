@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -242,6 +243,65 @@ func (m *Module) handleMyAccountLabels(c *gin.Context) {
 		labels[id] = billing.SafeAccountLabel(id, aliases)
 	}
 	c.JSON(http.StatusOK, gin.H{"labels": labels})
+}
+
+// quotaLookupTimeout bounds the live upstream quota probes so a single slow
+// provider cannot stall the 额度 page. This is a control-plane lookup, not the
+// proxy data path, so bounding it does not violate the upstream-timeout rule.
+const quotaLookupTimeout = 15 * time.Second
+
+// handleAccountQuota returns each allowed account's live upstream quota (Claude
+// 5h/weekly windows, Codex 5h/weekly windows, Antigravity credits). Accounts are
+// always identified by their customer-safe label, never the raw credential id.
+func (m *Module) handleAccountQuota(c *gin.Context) {
+	userID := userIDFromGin(c)
+	user, err := m.store.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	aliases, _ := m.store.AccountAliases(c.Request.Context())
+
+	// Resolve the account set the user may see: their allowed accounts, or every
+	// account when unrestricted (empty allowed set = access to all).
+	all := billing.Accounts()
+	providerByID := make(map[string]string, len(all))
+	for _, a := range all {
+		providerByID[a.ID] = a.Provider
+	}
+	ids := user.AllowedAuthIDs
+	if len(ids) == 0 {
+		ids = make([]string, 0, len(all))
+		for _, a := range all {
+			ids = append(ids, a.ID)
+		}
+	}
+
+	targets := make([]billing.AccountQuota, 0, len(ids))
+	for _, id := range ids {
+		targets = append(targets, billing.AccountQuota{
+			AuthID:   id,
+			Provider: providerByID[id],
+			Label:    billing.SafeAccountLabel(id, aliases),
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), quotaLookupTimeout)
+	defer cancel()
+	results := billing.FetchAccountQuotas(ctx, targets)
+
+	// Strip the raw auth id from the customer-facing payload.
+	out := make([]gin.H, 0, len(results))
+	for _, r := range results {
+		out = append(out, gin.H{
+			"provider": r.Provider,
+			"label":    r.Label,
+			"windows":  r.Windows,
+			"note":     r.Note,
+			"error":    r.Error,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"accounts": out})
 }
 
 func userView(u store.User) gin.H {
