@@ -134,6 +134,8 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.DELETE("/api-keys/:id", m.handleRevokeKey)
 	// Customer-safe labels for the user's own allowed accounts.
 	authed.GET("/account-labels", m.handleMyAccountLabels)
+	// Live upstream quota/balance for the user's allowed accounts.
+	authed.GET("/quota", m.handleAccountQuota)
 
 	authed.GET("/topup/methods", m.handleListTopupMethods)
 	authed.POST("/topup", m.handleCreateTopupOrder)
