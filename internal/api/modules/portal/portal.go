@@ -54,6 +54,8 @@ type Module struct {
 	keyGen          func() (raw string, err error)
 	onWalletChanged func(userID string)
 	notifier        billing.Notifier
+	emailSender     billing.EmailSender
+	loginCodes      *billing.LoginCodeStore
 }
 
 // New builds a portal module. A nil keyGen falls back to the default 32-byte
@@ -81,6 +83,21 @@ func (m *Module) SetNotifier(n billing.Notifier) {
 	m.notifier = n
 }
 
+// SetEmailLogin enables passwordless email-code login. Both a sender and a code
+// store are required; passing nil for either keeps email login disabled.
+func (m *Module) SetEmailLogin(sender billing.EmailSender, codes *billing.LoginCodeStore) {
+	if m == nil {
+		return
+	}
+	m.emailSender = sender
+	m.loginCodes = codes
+}
+
+// emailLoginEnabled reports whether passwordless email-code login is available.
+func (m *Module) emailLoginEnabled() bool {
+	return m != nil && m.emailSender != nil && m.loginCodes != nil
+}
+
 func (m *Module) notify(ctx context.Context, msg string) {
 	if m == nil || m.notifier == nil {
 		return
@@ -97,6 +114,11 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	}
 	r.POST("/register", m.handleRegister)
 	r.POST("/login", m.handleLogin)
+	// Public config (lets the UI know which auth methods are available) and
+	// passwordless email-code login.
+	r.GET("/config", m.handlePortalConfig)
+	r.POST("/login/code/request", m.handleRequestLoginCode)
+	r.POST("/login/code/verify", m.handleVerifyLoginCode)
 
 	authed := r.Group("")
 	authed.Use(m.AuthMiddleware())

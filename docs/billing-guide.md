@@ -45,7 +45,19 @@ BILLING_ALIPAY_NOTES=请按提示金额精确转账
 # ===== Telegram 通知（可选）=====
 BILLING_TELEGRAM_BOT_TOKEN=123456:ABC...
 BILLING_TELEGRAM_CHAT_ID=-100123456789
+
+# ===== 邮箱验证码登录（可选，配了 SMTP 才启用）=====
+# 用任意 SMTP 服务即可（Cloudflare 不提供对外 SMTP；免费可用 Gmail 应用专用密码 / Resend / Brevo）
+BILLING_SMTP_HOST=smtp.gmail.com         # 设了才开启验证码登录；不设则前端隐藏该入口
+BILLING_SMTP_PORT=587                     # 587=STARTTLS（默认），465=隐式 TLS
+BILLING_SMTP_USERNAME=you@gmail.com
+BILLING_SMTP_PASSWORD=<Gmail 应用专用密码>
+BILLING_SMTP_FROM=you@gmail.com           # 不填默认用 USERNAME
+BILLING_LOGIN_CODE_TTL=10m                # 验证码有效期（默认 10m）
+BILLING_LOGIN_CODE_COOLDOWN=60s           # 同一邮箱两次请求最小间隔（默认 60s）
 ```
+
+> 邮箱验证码登录：用户在登录页选「验证码」→ 填邮箱 → 收验证码 → 登录。**未注册的邮箱首次验证码登录即自动创建账号**（无密码，可在「设置」补设密码）。忘记密码时也可用它登录。
 
 ### pricing.json 示例
 
