@@ -22,11 +22,13 @@ services:
       BILLING_JWT_SECRET: "${BILLING_JWT_SECRET:?set BILLING_JWT_SECRET in .env - run openssl rand -hex 32}"
       # Your email; register with it in the portal, then restart to become admin.
       BILLING_ADMIN_EMAIL: "${BILLING_ADMIN_EMAIL:-}"
-      # Connection to the postgres service below. The username/password/db name
-      # here are just repeated from that service (they already match) — you do
-      # NOT need to look anything up. Only change this if you change
-      # POSTGRES_PASSWORD below (keep the two passwords identical).
-      PGSTORE_DSN: "${PGSTORE_DSN:-postgres://cpa:change-me@postgres:5432/cpa?sslmode=disable}"
+      # Billing's OWN database (the postgres service below). This is separate
+      # from PGSTORE_DSN — it only creates the billing tables and does NOT take
+      # over auth/config storage, so file-based auths (./auths) and config.yaml
+      # keep working as before. Username/password/db name are just repeated from
+      # the postgres service (already matched); only change if you change
+      # POSTGRES_PASSWORD below (keep both identical).
+      BILLING_DATABASE_URL: "${BILLING_DATABASE_URL:-postgres://cpa:change-me@postgres:5432/cpa?sslmode=disable}"
       # Optional knobs (safe defaults; override in .env if you want)
       BILLING_MARKUP: ${BILLING_MARKUP:-1.0}
       BILLING_BALANCE_THRESHOLD: ${BILLING_BALANCE_THRESHOLD:-0}
