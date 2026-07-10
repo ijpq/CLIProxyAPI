@@ -42,6 +42,8 @@ type Store interface {
 	ListAllUsers(ctx context.Context, limit int) ([]store.User, error)
 	AdminCreditWallet(ctx context.Context, userID, amountStr, reference, note string) (string, error)
 	SetUserLimits(ctx context.Context, userID string, unbilled bool, allowedModels, allowedAuthIDs []string) error
+	SetAccountAlias(ctx context.Context, authID, label string) error
+	AccountAliases(ctx context.Context) (map[string]string, error)
 	AggregateUsageByDay(ctx context.Context, userID string, days int) ([]store.DailyUsageStat, error)
 	AggregateUsageByModel(ctx context.Context, userID string, days int) ([]store.ModelUsageStat, error)
 }
@@ -130,6 +132,8 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.GET("/api-keys", m.handleListKeys)
 	authed.POST("/api-keys", m.handleCreateKey)
 	authed.DELETE("/api-keys/:id", m.handleRevokeKey)
+	// Customer-safe labels for the user's own allowed accounts.
+	authed.GET("/account-labels", m.handleMyAccountLabels)
 
 	authed.GET("/topup/methods", m.handleListTopupMethods)
 	authed.POST("/topup", m.handleCreateTopupOrder)
@@ -151,6 +155,7 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	admin.POST("/users/:id/limits", m.handleAdminSetUserLimits)
 	admin.GET("/models", m.handleAdminListModels)
 	admin.GET("/accounts", m.handleAdminListAccounts)
+	admin.POST("/accounts/alias", m.handleAdminSetAccountAlias)
 }
 
 // defaultKeyGenerator produces a 32-byte random key encoded as
