@@ -291,16 +291,19 @@ func (m *Module) handleAccountQuota(c *gin.Context) {
 	defer cancel()
 	results := billing.FetchAccountQuotas(ctx, targets)
 
+	canReset := userCanReset(user)
 	out := make([]gin.H, 0, len(results))
 	for _, r := range results {
-		out = append(out, accountQuotaView(r))
+		out = append(out, accountQuotaView(r, canReset))
 	}
 	c.JSON(http.StatusOK, gin.H{"accounts": out})
 }
 
 // accountQuotaView is the customer-facing per-account payload. It exposes an
-// opaque handle (for refresh/reset) but never the raw credential id/email.
-func accountQuotaView(q billing.AccountQuota) gin.H {
+// opaque handle (for refresh/reset) but never the raw credential id/email. The
+// reset button is only offered when the account supports it AND the user has
+// been granted reset permission by the super admin.
+func accountQuotaView(q billing.AccountQuota, canReset bool) gin.H {
 	return gin.H{
 		"handle":        billing.AccountHandle(q.AuthID),
 		"provider":      q.Provider,
@@ -309,7 +312,7 @@ func accountQuotaView(q billing.AccountQuota) gin.H {
 		"details":       q.Details,
 		"windows":       q.Windows,
 		"reset_credits": q.ResetCredits,
-		"can_reset":     q.CanReset,
+		"can_reset":     q.CanReset && canReset,
 		"note":          q.Note,
 		"error":         q.Error,
 	}
@@ -359,16 +362,21 @@ func (m *Module) handleRefreshAccountQuota(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), quotaLookupTimeout)
 	defer cancel()
-	c.JSON(http.StatusOK, accountQuotaView(billing.FetchAccountQuota(ctx, id, provider, label)))
+	c.JSON(http.StatusOK, accountQuotaView(billing.FetchAccountQuota(ctx, id, provider, label), userCanReset(user)))
 }
 
 // handleResetAccountCredit redeems one Codex rate-limit reset credit for the
-// account, then returns its refreshed quota. Codex accounts only.
+// account, then returns its refreshed quota. Codex accounts only, and only for
+// users the super admin granted reset permission.
 func (m *Module) handleResetAccountCredit(c *gin.Context) {
 	userID := userIDFromGin(c)
 	user, err := m.store.GetUserByID(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	if !userCanReset(user) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无重置权限，请联系管理员开通"})
 		return
 	}
 	id, provider, label, ok := m.accountForHandle(c.Request.Context(), user, c.Param("handle"))
@@ -383,7 +391,7 @@ func (m *Module) handleResetAccountCredit(c *gin.Context) {
 		return
 	}
 	m.notify(c.Request.Context(), fmt.Sprintf("♻️ 重置额度: 用户 %s 消耗了账号 %s 的一个重置额度", userID, label))
-	c.JSON(http.StatusOK, accountQuotaView(billing.FetchAccountQuota(ctx, id, provider, label)))
+	c.JSON(http.StatusOK, accountQuotaView(billing.FetchAccountQuota(ctx, id, provider, label), true))
 }
 
 func userView(u store.User) gin.H {
@@ -404,8 +412,15 @@ func userView(u store.User) gin.H {
 		"unbilled":         u.Unbilled,
 		"allowed_models":   models,
 		"allowed_auth_ids": auths,
+		"allow_reset":      u.AllowReset,
 		"created_at":       u.CreatedAt,
 	}
+}
+
+// userCanReset reports whether the user may consume provider reset credits.
+// The super admin always may; other users only when granted.
+func userCanReset(u store.User) bool {
+	return u.IsAdmin || u.AllowReset
 }
 
 func apiKeyView(k store.APIKeyRecord) gin.H {

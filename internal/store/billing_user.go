@@ -27,6 +27,7 @@ type User struct {
 	Unbilled       bool     // exempt from wallet balance check + debit
 	AllowedModels  []string // restrict to these client-visible models (empty = all)
 	AllowedAuthIDs []string // restrict to these upstream accounts (empty = all)
+	AllowReset     bool     // may consume provider rate-limit reset credits
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -69,14 +70,14 @@ type rowScanner interface {
 
 // userSelectColumns is the canonical column list for loading a User; kept in
 // sync with scanUser so every user query decodes the same shape.
-const userSelectColumns = "id, email, password_hash, display_name, status, is_admin, unbilled, allowed_models, allowed_auth_ids, created_at, updated_at"
+const userSelectColumns = "id, email, password_hash, display_name, status, is_admin, unbilled, allowed_models, allowed_auth_ids, allow_reset, created_at, updated_at"
 
 func scanUser(row rowScanner) (User, error) {
 	var u User
 	var modelsRaw, authRaw string
 	if err := row.Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status, &u.IsAdmin,
-		&u.Unbilled, &modelsRaw, &authRaw, &u.CreatedAt, &u.UpdatedAt,
+		&u.Unbilled, &modelsRaw, &authRaw, &u.AllowReset, &u.CreatedAt, &u.UpdatedAt,
 	); err != nil {
 		return User{}, err
 	}
@@ -386,9 +387,10 @@ func (s *PostgresStore) PromoteUserToAdmin(ctx context.Context, email string) er
 }
 
 // SetUserLimits replaces the per-user access controls (unbilled + allowed
-// models + allowed upstream accounts) for the given user. Empty slices clear
-// the corresponding restriction. Returns ErrUserNotFound when no row matches.
-func (s *PostgresStore) SetUserLimits(ctx context.Context, userID string, unbilled bool, allowedModels, allowedAuthIDs []string) error {
+// models + allowed upstream accounts + reset permission) for the given user.
+// Empty slices clear the corresponding restriction. Returns ErrUserNotFound
+// when no row matches.
+func (s *PostgresStore) SetUserLimits(ctx context.Context, userID string, unbilled bool, allowedModels, allowedAuthIDs []string, allowReset bool) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("postgres store: not initialized")
 	}
@@ -396,10 +398,10 @@ func (s *PostgresStore) SetUserLimits(ctx context.Context, userID string, unbill
 		return ErrUserNotFound
 	}
 	query := fmt.Sprintf(
-		"UPDATE %s SET unbilled = $2, allowed_models = $3, allowed_auth_ids = $4, updated_at = NOW() WHERE id = $1",
+		"UPDATE %s SET unbilled = $2, allowed_models = $3, allowed_auth_ids = $4, allow_reset = $5, updated_at = NOW() WHERE id = $1",
 		s.fullTableName(BillingUsersTable),
 	)
-	res, err := s.db.ExecContext(ctx, query, userID, unbilled, EncodeAuthIDs(allowedModels), EncodeAuthIDs(allowedAuthIDs))
+	res, err := s.db.ExecContext(ctx, query, userID, unbilled, EncodeAuthIDs(allowedModels), EncodeAuthIDs(allowedAuthIDs), allowReset)
 	if err != nil {
 		return fmt.Errorf("postgres store: set user limits: %w", err)
 	}

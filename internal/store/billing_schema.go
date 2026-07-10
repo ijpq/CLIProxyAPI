@@ -166,6 +166,10 @@ func billingSchemaStatements(s *PostgresStore) []string {
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS unbilled BOOLEAN NOT NULL DEFAULT FALSE`, users),
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS allowed_models TEXT NOT NULL DEFAULT ''`, users),
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS allowed_auth_ids TEXT NOT NULL DEFAULT ''`, users),
+		// allow_reset lets the user consume a provider's rate-limit reset credit
+		// (e.g. Codex "reset quota") from the portal. Off by default; granted only
+		// by the super admin.
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS allow_reset BOOLEAN NOT NULL DEFAULT FALSE`, users),
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS auth_id TEXT NOT NULL DEFAULT ''`, usageRecords),
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS auth_label TEXT NOT NULL DEFAULT ''`, usageRecords),
 
