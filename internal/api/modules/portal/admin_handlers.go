@@ -5,11 +5,17 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
 )
+
+type adminAliasRequest struct {
+	ID    string `json:"id" binding:"required"`
+	Label string `json:"label"`
+}
 
 type adminCreditRequest struct {
 	UserID string  `json:"user_id" binding:"required"`
@@ -102,14 +108,35 @@ func (m *Module) handleAdminListModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"models": models})
 }
 
-// handleAdminListAccounts returns every upstream account for the admin's
-// per-user account whitelist picker.
+// handleAdminListAccounts returns every upstream account (real id/provider/
+// label, admin-only) plus its current customer-facing alias, for both the
+// per-user whitelist picker and the alias editor.
 func (m *Module) handleAdminListAccounts(c *gin.Context) {
 	accounts := billing.Accounts()
-	if accounts == nil {
-		accounts = []billing.Account{}
+	aliases, _ := m.store.AccountAliases(c.Request.Context())
+	out := make([]gin.H, 0, len(accounts))
+	for _, a := range accounts {
+		out = append(out, gin.H{
+			"id": a.ID, "provider": a.Provider, "label": a.Label, "status": a.Status,
+			"alias": aliases[a.ID],
+		})
 	}
-	c.JSON(http.StatusOK, gin.H{"accounts": accounts})
+	c.JSON(http.StatusOK, gin.H{"accounts": out})
+}
+
+// handleAdminSetAccountAlias sets/clears the customer-facing display name for
+// an upstream account. Super admin only.
+func (m *Module) handleAdminSetAccountAlias(c *gin.Context) {
+	var req adminAliasRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := m.store.SetAccountAlias(c.Request.Context(), req.ID, req.Label); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "set alias failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": req.ID, "alias": strings.TrimSpace(req.Label)})
 }
 
 func (m *Module) handleUsageStats(c *gin.Context) {

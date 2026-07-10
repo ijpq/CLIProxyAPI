@@ -1,9 +1,39 @@
 package billing
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"strings"
 	"sync"
 )
+
+// SafeAccountLabel returns a customer-safe display name for an upstream account:
+// the admin-set alias when present, otherwise "<Provider> · <short-hash>", which
+// never exposes the credential filename (which may contain the operator's
+// account email).
+func SafeAccountLabel(authID string, aliases map[string]string) string {
+	authID = strings.TrimSpace(authID)
+	if aliases != nil {
+		if a := strings.TrimSpace(aliases[authID]); a != "" {
+			return a
+		}
+	}
+	provider := "account"
+	for _, acc := range Accounts() {
+		if acc.ID == authID {
+			if p := strings.TrimSpace(acc.Provider); p != "" {
+				provider = p
+			}
+			break
+		}
+	}
+	if provider != "" {
+		provider = strings.ToUpper(provider[:1]) + provider[1:]
+	}
+	sum := sha256.Sum256([]byte(authID))
+	return fmt.Sprintf("%s · %s", provider, hex.EncodeToString(sum[:])[:6])
+}
 
 // Account describes an upstream credential (auth) that privileged users can
 // bind their API keys to. It is a projection of the core auth record limited to
