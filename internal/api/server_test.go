@@ -679,8 +679,12 @@ func TestModelsWithClientVersionReturnsCodexCatalog(t *testing.T) {
 	if got, _ := custom["display_name"].(string); got != "Custom Codex Model" {
 		t.Fatalf("custom display_name = %q, want Custom Codex Model", got)
 	}
-	if got := int(codexClientTestPriority(custom["priority"])); got != 129 {
-		t.Fatalf("custom priority = %v, want 129", custom["priority"])
+	// Non-template models are assigned priority = maxTemplatePriority + 100*(rank+1)
+	// (see applyCodexClientNonTemplatePriorities). This tracks the built-in codex
+	// template catalog: bump the expected value whenever the max template priority
+	// changes (currently 43, so 43 + 100 = 143 for the first non-template model).
+	if got := int(codexClientTestPriority(custom["priority"])); got != 143 {
+		t.Fatalf("custom priority = %v, want 143", custom["priority"])
 	}
 	if got, _ := custom["description"].(string); got != "Custom model from registry" {
 		t.Fatalf("custom description = %q, want Custom model from registry", got)
