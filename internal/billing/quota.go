@@ -1,7 +1,11 @@
 package billing
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -66,14 +70,16 @@ type QuotaDetail struct {
 // AccountQuota is the per-account quota view returned to end users. It never
 // exposes the raw credential id/email — Label is the customer-safe name.
 type AccountQuota struct {
-	AuthID   string        `json:"auth_id"`
-	Provider string        `json:"provider"`
-	Label    string        `json:"label"`
-	PlanType string        `json:"plan_type,omitempty"`
-	Details  []QuotaDetail `json:"details,omitempty"`
-	Windows  []QuotaWindow `json:"windows"`
-	Note     string        `json:"note,omitempty"`
-	Error    string        `json:"error,omitempty"`
+	AuthID       string        `json:"auth_id"`
+	Provider     string        `json:"provider"`
+	Label        string        `json:"label"`
+	PlanType     string        `json:"plan_type,omitempty"`
+	Details      []QuotaDetail `json:"details,omitempty"`
+	Windows      []QuotaWindow `json:"windows"`
+	ResetCredits int           `json:"reset_credits,omitempty"`
+	CanReset     bool          `json:"can_reset,omitempty"`
+	Note         string        `json:"note,omitempty"`
+	Error        string        `json:"error,omitempty"`
 }
 
 func (q *AccountQuota) addDetail(label, value string) {
@@ -91,6 +97,7 @@ const (
 	claudeUsageURL       = "https://api.anthropic.com/api/oauth/usage"
 	claudeProfileURL     = "https://api.anthropic.com/api/oauth/profile"
 	codexUsageURL        = "https://chatgpt.com/backend-api/wham/usage"
+	codexResetConsumeURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 	claudeUsageUserAgent = "cliproxyapi"
 	codexUsageUserAgent  = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
 )
@@ -154,6 +161,55 @@ func FetchAccountQuotas(ctx context.Context, accounts []AccountQuota) []AccountQ
 	return out
 }
 
+// AccountHandle returns a stable, non-reversible handle for an upstream account
+// id. The portal references accounts by this handle so the raw credential id
+// (which may embed the operator's email) never reaches the client.
+func AccountHandle(id string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(id)))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// ConsumeCodexResetCredit redeems one Codex rate-limit reset credit for the
+// account, resetting its 5h limit early. It mirrors the Management Center's
+// "reset quota" action. Errors when the account is not Codex or the upstream
+// rejects the redemption.
+func ConsumeCodexResetCredit(ctx context.Context, id string) error {
+	resolver := quotaAuthResolver
+	if resolver == nil {
+		return fmt.Errorf("quota lookup unavailable")
+	}
+	ua, ok := resolver(id)
+	if !ok {
+		return fmt.Errorf("account not found")
+	}
+	if !strings.EqualFold(strings.TrimSpace(ua.Provider), "codex") {
+		return fmt.Errorf("仅 Codex 账号支持重置额度")
+	}
+	body := []byte(fmt.Sprintf(`{"redeem_request_id":%q}`, randomRequestID()))
+	_, status, err := quotaDo(ctx, ua, http.MethodPost, codexResetConsumeURL, map[string]string{
+		"Content-Type": "application/json",
+		"User-Agent":   codexUsageUserAgent,
+	}, body)
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return statusError(status)
+	}
+	return nil
+}
+
+// randomRequestID returns a random UUID-v4 string for idempotent redemption.
+func randomRequestID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
 func fetchClaudeQuota(ctx context.Context, ua UpstreamAuth, out *AccountQuota) error {
 	headers := map[string]string{
 		"Content-Type":   "application/json",
@@ -198,6 +254,8 @@ func fetchCodexQuota(ctx context.Context, ua UpstreamAuth, out *AccountQuota) er
 		out.addDetail("套餐", plan)
 	}
 	if credits := firstResult(root.Get("rate_limit_reset_credits"), "available_count", "availableCount"); credits.Exists() {
+		out.ResetCredits = int(credits.Float())
+		out.CanReset = out.ResetCredits > 0
 		out.addDetail("可用重置额度", trimFloat(credits.Float()))
 	}
 	out.Windows = parseCodexRateLimit(root.Get("rate_limit"), "")
@@ -388,16 +446,25 @@ func applyAntigravityCredits(out *AccountQuota, c *AntigravityCredits) {
 	}
 }
 
-// quotaGet performs the live GET, injecting the bearer token and honoring the
-// account proxy. It intentionally sets no client timeout: cancellation is driven
-// by the caller's context (a bounded control-plane deadline), consistent with
-// the project's "no timeouts on established upstream connections" rule.
 func quotaGet(ctx context.Context, ua UpstreamAuth, url string, headers map[string]string) ([]byte, int, error) {
+	return quotaDo(ctx, ua, http.MethodGet, url, headers, nil)
+}
+
+// quotaDo performs the live upstream request, injecting the bearer token and
+// honoring the account proxy. It intentionally sets no client timeout:
+// cancellation is driven by the caller's context (a bounded control-plane
+// deadline), consistent with the project's "no timeouts on established upstream
+// connections" rule.
+func quotaDo(ctx context.Context, ua UpstreamAuth, method, url string, headers map[string]string, body []byte) ([]byte, int, error) {
 	token := strings.TrimSpace(ua.Token)
 	if token == "" {
 		return nil, 0, fmt.Errorf("账号令牌不可用（可能需要重新登录上游）")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	var reader io.Reader
+	if len(body) > 0 {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, reader)
 	if err != nil {
 		return nil, 0, err
 	}
