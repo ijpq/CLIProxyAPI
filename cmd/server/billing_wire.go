@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -28,16 +29,50 @@ func billingEnabled() bool {
 	return v
 }
 
-// setupBilling wires the database-backed access provider and the portal
-// module when billing is enabled and a Postgres store is available. It
-// returns the additional api.ServerOption values that mount the portal
-// routes; an empty slice means billing is disabled or unconfigured.
-func setupBilling(ctx context.Context, pg *store.PostgresStore) []api.ServerOption {
+// resolveBillingStore picks the Postgres database billing uses.
+//
+// A dedicated BILLING_DATABASE_URL gives billing its OWN database and does NOT
+// touch auth/config storage — file-based auths and config.yaml keep working
+// exactly as before (billing only creates its own tables). This is the
+// recommended setup. When BILLING_DATABASE_URL is unset, billing falls back to
+// the shared PGSTORE_DSN store if present (legacy behavior, where Postgres also
+// takes over auth/config storage). Returns nil (and logs why) when no billing
+// database is configured.
+func resolveBillingStore(ctx context.Context, sharedPG *store.PostgresStore) *store.PostgresStore {
+	dsn := strings.TrimSpace(os.Getenv("BILLING_DATABASE_URL"))
+	if dsn == "" {
+		if sharedPG != nil {
+			return sharedPG
+		}
+		log.Error("BILLING_ENABLED set but no billing database configured; set BILLING_DATABASE_URL (recommended: keeps auth/config file-based) or PGSTORE_DSN; billing disabled")
+		return nil
+	}
+	// Dedicated billing DB: a bare connection + an unused spool dir. We never
+	// call Bootstrap/RegisterTokenStore/EnsureSchema on it, so it only ever
+	// holds the billing tables and never becomes the auth/config token store.
+	pg, err := store.NewPostgresStore(ctx, store.PostgresStoreConfig{
+		DSN:      dsn,
+		SpoolDir: filepath.Join(os.TempDir(), "cliproxy-billing-store"),
+	})
+	if err != nil {
+		log.Errorf("failed to connect billing database (BILLING_DATABASE_URL): %v; billing disabled", err)
+		return nil
+	}
+	log.Info("billing using dedicated database (BILLING_DATABASE_URL); auth/config storage unchanged")
+	return pg
+}
+
+// setupBilling wires the database-backed access provider and the portal module
+// when billing is enabled and a billing database is available. It returns the
+// additional api.ServerOption values that mount the portal routes; an empty
+// slice means billing is disabled or unconfigured. The passed store is the
+// optional shared PGSTORE_DSN store used only as a legacy fallback.
+func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.ServerOption {
 	if !billingEnabled() {
 		return nil
 	}
+	pg := resolveBillingStore(ctx, sharedPG)
 	if pg == nil {
-		log.Warn("BILLING_ENABLED set but Postgres store is not active; billing disabled")
 		return nil
 	}
 	secret := strings.TrimSpace(os.Getenv("BILLING_JWT_SECRET"))
