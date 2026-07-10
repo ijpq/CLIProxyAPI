@@ -27,6 +27,7 @@ type adminLimitsRequest struct {
 	Unbilled       bool     `json:"unbilled"`
 	AllowedModels  []string `json:"allowed_models"`
 	AllowedAuthIDs []string `json:"allowed_auth_ids"`
+	AllowReset     bool     `json:"allow_reset"`
 }
 
 func (m *Module) handleAdminListUsers(c *gin.Context) {
@@ -81,7 +82,7 @@ func (m *Module) handleAdminSetUserLimits(c *gin.Context) {
 	}
 	models := billing.ValidModels(req.AllowedModels)
 	auths := billing.ValidAccountIDs(req.AllowedAuthIDs)
-	if err := m.store.SetUserLimits(c.Request.Context(), userID, req.Unbilled, models, auths); err != nil {
+	if err := m.store.SetUserLimits(c.Request.Context(), userID, req.Unbilled, models, auths, req.AllowReset); err != nil {
 		if errors.Is(err, store.ErrUserNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 			return
@@ -89,12 +90,13 @@ func (m *Module) handleAdminSetUserLimits(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update limits failed"})
 		return
 	}
-	m.notify(c.Request.Context(), fmt.Sprintf("🔧 权限更新: 用户 %s (unbilled=%t, models=%d, accounts=%d)", userID, req.Unbilled, len(models), len(auths)))
+	m.notify(c.Request.Context(), fmt.Sprintf("🔧 权限更新: 用户 %s (unbilled=%t, models=%d, accounts=%d, allow_reset=%t)", userID, req.Unbilled, len(models), len(auths), req.AllowReset))
 	c.JSON(http.StatusOK, gin.H{
 		"id":               userID,
 		"unbilled":         req.Unbilled,
 		"allowed_models":   models,
 		"allowed_auth_ids": auths,
+		"allow_reset":      req.AllowReset,
 	})
 }
 
