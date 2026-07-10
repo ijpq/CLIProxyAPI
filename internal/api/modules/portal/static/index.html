@@ -127,6 +127,30 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
 .auth-alt{margin-top:1rem;text-align:center;font-size:.85rem}
 .auth-alt button{background:none;border:none;color:var(--accent-2);cursor:pointer;font-weight:600;font-size:.85rem}
 
+/* ---------- Account quota meters ---------- */
+.qgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
+.qacct{border:1px solid var(--border-2);border-radius:var(--radius);background:var(--bg-2);padding:1rem 1.1rem}
+.qacct-head{display:flex;align-items:center;gap:.55rem;margin-bottom:.9rem}
+.qacct-head .name{font-weight:700;font-size:.95rem}
+.qacct-note{font-size:.82rem;color:var(--muted);margin-top:.2rem}
+.qacct-err{font-size:.8rem;color:#fb7185;margin-top:.2rem}
+.qmeter{margin-bottom:.85rem}
+.qmeter:last-child{margin-bottom:0}
+.qmeter-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:.35rem;gap:.5rem}
+.qmeter-label{font-size:.83rem;font-weight:600}
+.qmeter-pct{font-size:.83rem;font-weight:700;color:var(--accent-2)}
+.qmeter-reset{font-size:.72rem;color:var(--faint)}
+.qbar{height:8px;border-radius:99px;background:var(--surface-2);overflow:hidden}
+.qbar>span{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent-2),var(--accent));transition:width .4s}
+.qbar.warn>span{background:linear-gradient(90deg,#fbbf24,var(--warn))}
+.qbar.danger>span{background:linear-gradient(90deg,#fb7185,var(--danger))}
+.qdetails{margin-bottom:.9rem;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
+.qrow{display:flex;justify-content:space-between;gap:.6rem;padding:.42rem .65rem;font-size:.8rem}
+.qrow:nth-child(odd){background:var(--surface-2)}
+.qrow>span{color:var(--muted)}
+.qrow>b{font-weight:700}
+.qsub{font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:.2rem 0 .55rem}
+
 /* ---------- Topup ---------- */
 .methods-grid{display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.2rem}
 .method-card{border:1px solid var(--border-2);border-radius:var(--radius);padding:1rem 1.2rem;cursor:pointer;min-width:150px;text-align:center;transition:all .15s;background:var(--surface)}
@@ -300,6 +324,13 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
       <div class="card">
         <h3>可用账号</h3>
         <div id="q-accounts" class="chips"></div>
+      </div>
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap">
+          <div><h3 style="margin:0">账号余额</h3><p class="muted" style="font-size:.82rem;margin:.25rem 0 0">你可用账号的上游剩余额度（5 小时 / 每周 等）</p></div>
+          <button class="btn" id="q-refresh" onclick="loadAccountQuota()" type="button">刷新</button>
+        </div>
+        <div id="q-quota" class="qgrid" style="margin-top:1rem"></div>
       </div>
     </section>
 
@@ -526,7 +557,63 @@ async function loadQuota() {
     document.getElementById('q-accounts').innerHTML = accts.length
       ? accts.map(a => `<span class="chip"><span class="dot"></span>${esc(labels[a] || '账号')}</span>`).join('')
       : '<span class="chip all">全部账号</span>';
+    loadAccountQuota();
   } catch(err) { if (err.status === 401) doLogout(); }
+}
+
+// Live upstream quota/balance for the user's allowed accounts.
+async function loadAccountQuota() {
+  const box = document.getElementById('q-quota');
+  const btn = document.getElementById('q-refresh');
+  box.innerHTML = '<p class="muted" style="font-size:.85rem">正在查询上游余额…</p>';
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/quota');
+    const accts = (res && res.accounts) || [];
+    if (!accts.length) { box.innerHTML = '<p class="empty">暂无可查询余额的账号</p>'; return; }
+    box.innerHTML = accts.map(renderQuotaAccount).join('');
+  } catch(err) {
+    if (err.status === 401) { doLogout(); return; }
+    box.innerHTML = '<p class="qacct-err">余额查询失败</p>';
+  } finally { if (btn) btn.disabled = false; }
+}
+
+function renderQuotaAccount(a) {
+  const badge = providerBadge(a.provider);
+  let inner = '';
+  if (a.error) {
+    inner = `<div class="qacct-err">${esc(a.error)}</div>`;
+  } else {
+    if (a.details && a.details.length) {
+      inner += '<div class="qdetails">' + a.details.map(d =>
+        `<div class="qrow"><span>${esc(d.label)}</span><b>${esc(d.value)}</b></div>`).join('') + '</div>';
+    }
+    if (a.windows && a.windows.length) {
+      inner += '<div class="qsub">用量窗口</div>' + a.windows.map(renderQuotaMeter).join('');
+    }
+    if (a.note) inner += `<div class="qacct-note">${esc(a.note)}</div>`;
+    if (!inner) inner = '<div class="qacct-note">暂无数据</div>';
+  }
+  return `<div class="qacct"><div class="qacct-head">${badge}<span class="name">${esc(a.label || '账号')}</span></div>${inner}</div>`;
+}
+
+function renderQuotaMeter(w) {
+  const rem = (w.remaining_percent == null) ? null : Math.max(0, Math.min(100, w.remaining_percent));
+  const pct = rem == null ? '--' : Math.round(rem) + '%';
+  const cls = rem == null ? '' : (rem <= 10 ? 'danger' : (rem <= 30 ? 'warn' : ''));
+  const width = rem == null ? 0 : rem;
+  const reset = w.resets_at ? `重置于 ${fmtTime(w.resets_at)}` : '';
+  return `<div class="qmeter">
+    <div class="qmeter-top"><span class="qmeter-label">${esc(w.label)}</span>
+      <span><span class="qmeter-pct">${pct}</span>${reset ? ` <span class="qmeter-reset">· ${esc(reset)}</span>` : ''}</span></div>
+    <div class="qbar ${cls}"><span style="width:${width}%"></span></div>
+  </div>`;
+}
+
+function providerBadge(p) {
+  const map = {claude:['Claude','badge-yellow'], codex:['Codex','badge-violet'], antigravity:['Antigravity','badge-blue']};
+  const m = map[(p||'').toLowerCase()] || [p || '账号','badge-gray'];
+  return `<span class="badge ${m[1]}">${esc(m[0])}</span>`;
 }
 window.addEventListener('hashchange', () => navigate(location.hash.slice(1)));
 
