@@ -10,8 +10,12 @@ BILLING_ENABLED=true
 BILLING_JWT_SECRET=<openssl rand -hex 32 生成>
 BILLING_ADMIN_EMAIL=you@example.com      # 你的注册邮箱，启动后自动升为管理员
 
-# Postgres（已有，billing 表会自动创建）
-PGSTORE_DSN=postgres://user:pass@host:5432/dbname
+# 计费专用数据库（billing 表自动创建）。这是 billing 自己的库，
+# 与 PGSTORE_DSN 无关：只建 billing 的表，不接管 auth/config 存储——
+# 你的文件式认证(auths/)和 config.yaml 照常工作，不受影响。
+BILLING_DATABASE_URL=postgres://user:pass@host:5432/dbname
+# 兼容：若未设 BILLING_DATABASE_URL 但设了 PGSTORE_DSN，billing 会复用那个库
+# （但那种模式下 Postgres 会同时接管 auth/config 存储，文件不再被读取——不推荐）。
 
 # ===== 定价 =====
 BILLING_PRICING_FILE=/data/pricing.json  # 模型定价表路径
