@@ -10,12 +10,13 @@ import (
 // without re-typing identifiers, but they are not configurable yet because the
 // surrounding code (billing module) is built against these names.
 const (
-	BillingUsersTable        = "users"
-	BillingAPIKeysTable      = "api_keys"
-	BillingWalletsTable      = "wallets"
-	BillingTransactionsTable = "transactions"
-	BillingUsageRecordsTable = "usage_records"
-	BillingTopupOrdersTable  = "topup_orders"
+	BillingUsersTable          = "users"
+	BillingAPIKeysTable        = "api_keys"
+	BillingWalletsTable        = "wallets"
+	BillingTransactionsTable   = "transactions"
+	BillingUsageRecordsTable   = "usage_records"
+	BillingTopupOrdersTable    = "topup_orders"
+	BillingAccountAliasesTable = "account_aliases"
 )
 
 // EnsureBillingSchema creates the tables required for the paid-tier features:
@@ -167,5 +168,16 @@ func billingSchemaStatements(s *PostgresStore) []string {
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS allowed_auth_ids TEXT NOT NULL DEFAULT ''`, users),
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS auth_id TEXT NOT NULL DEFAULT ''`, usageRecords),
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS auth_label TEXT NOT NULL DEFAULT ''`, usageRecords),
+
+		// Customer-facing display names for upstream accounts. auth_id is the
+		// credential id (filename); label is what end users see instead of the
+		// raw filename (which may contain the operator's account email).
+		fmt.Sprintf(`
+			CREATE TABLE IF NOT EXISTS %s (
+				auth_id     TEXT PRIMARY KEY,
+				label       TEXT NOT NULL DEFAULT '',
+				updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			)
+		`, s.fullTableName(BillingAccountAliasesTable)),
 	}
 }
