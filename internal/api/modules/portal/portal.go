@@ -136,6 +136,8 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.GET("/account-labels", m.handleMyAccountLabels)
 	// Live upstream quota/balance for the user's allowed accounts.
 	authed.GET("/quota", m.handleAccountQuota)
+	authed.GET("/quota/:handle", m.handleRefreshAccountQuota)
+	authed.POST("/quota/:handle/reset", m.handleResetAccountCredit)
 
 	authed.GET("/topup/methods", m.handleListTopupMethods)
 	authed.POST("/topup", m.handleCreateTopupOrder)
