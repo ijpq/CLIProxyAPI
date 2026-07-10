@@ -41,7 +41,7 @@ type Store interface {
 	ConfirmTopupOrder(ctx context.Context, orderID, adminNote string) (store.TopupOrder, error)
 	ListAllUsers(ctx context.Context, limit int) ([]store.User, error)
 	AdminCreditWallet(ctx context.Context, userID, amountStr, reference, note string) (string, error)
-	SetUserLimits(ctx context.Context, userID string, unbilled bool, allowedModels, allowedAuthIDs []string) error
+	SetUserLimits(ctx context.Context, userID string, unbilled bool, allowedModels, allowedAuthIDs []string, allowReset bool) error
 	SetAccountAlias(ctx context.Context, authID, label string) error
 	AccountAliases(ctx context.Context) (map[string]string, error)
 	AggregateUsageByDay(ctx context.Context, userID string, days int) ([]store.DailyUsageStat, error)

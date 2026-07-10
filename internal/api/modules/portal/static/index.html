@@ -403,6 +403,7 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
     </div>
     <div class="modal-body">
       <label class="switch-row"><span>免余额（不计费，用量仍记录）</span><input type="checkbox" id="um-unbilled"></label>
+      <label class="switch-row"><span>允许重置额度（可消耗 Codex 重置额度）</span><input type="checkbox" id="um-allowreset"></label>
       <div class="field-label">可用模型（都不选 = 允许全部）</div>
       <div class="tabs-sm">
         <button class="tab-sm active" data-tab="models" onclick="umTab('models')">按模型选</button>
@@ -939,6 +940,7 @@ async function openUserModal(id) {
   editingUserId = id;
   document.getElementById('um-email').textContent = u.email;
   document.getElementById('um-unbilled').checked = !!u.unbilled;
+  document.getElementById('um-allowreset').checked = !!u.allow_reset;
   document.getElementById('um-msg').innerHTML = '';
   umTab('models');
   // Load the pickers once (models + accounts), then check the user's current sets.
@@ -973,9 +975,10 @@ async function saveUserLimits() {
   const models = [...document.querySelectorAll('#um-model-list input:checked')].map(i => i.value);
   const accounts = [...document.querySelectorAll('#um-account-list input:checked')].map(i => i.value);
   const unbilled = document.getElementById('um-unbilled').checked;
+  const allow_reset = document.getElementById('um-allowreset').checked;
   try {
     await api('/admin/users/' + editingUserId + '/limits', {method:'POST',
-      body: JSON.stringify({unbilled, allowed_models: models, allowed_auth_ids: accounts})});
+      body: JSON.stringify({unbilled, allowed_models: models, allowed_auth_ids: accounts, allow_reset})});
     closeUserModal(); loadAdmin();
   } catch(err) { document.getElementById('um-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
 }
