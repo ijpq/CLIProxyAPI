@@ -226,6 +226,24 @@ func (m *Module) handleRevokeKey(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// handleMyAccountLabels returns customer-safe display names for the current
+// user's allowed accounts (admin alias, or provider + short hash — never the
+// raw credential filename, which may contain the operator's email).
+func (m *Module) handleMyAccountLabels(c *gin.Context) {
+	userID := userIDFromGin(c)
+	user, err := m.store.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	aliases, _ := m.store.AccountAliases(c.Request.Context())
+	labels := make(map[string]string, len(user.AllowedAuthIDs))
+	for _, id := range user.AllowedAuthIDs {
+		labels[id] = billing.SafeAccountLabel(id, aliases)
+	}
+	c.JSON(http.StatusOK, gin.H{"labels": labels})
+}
+
 func userView(u store.User) gin.H {
 	models := u.AllowedModels
 	if models == nil {
