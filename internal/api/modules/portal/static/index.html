@@ -335,6 +335,12 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
         <tbody id="admin-users"></tbody></table></div>
       </div>
       <div class="card">
+        <h3>上游账号 · 对客户显示名</h3>
+        <p class="muted" style="font-size:.82rem;margin:-.5rem 0 .9rem">给账号设个别名，客户在「额度」页看到的是它；不填则显示 <code>Provider · 短ID</code>，不会泄露文件名/邮箱。</p>
+        <div class="table-wrap"><table><thead><tr><th>账号（仅你可见）</th><th>Provider</th><th>状态</th><th>对客户显示名</th><th></th></tr></thead>
+        <tbody id="admin-accounts"></tbody></table></div>
+      </div>
+      <div class="card">
         <h3>手动调整余额</h3>
         <div id="credit-msg"></div>
         <div class="inline-form">
@@ -508,8 +514,8 @@ function navigate(page) {
 // My entitlements: balance, billing status, allowed models/accounts.
 async function loadQuota() {
   try {
-    const [me, wallet] = await Promise.all([api('/me'), api('/wallet')]);
-    const u = me.user;
+    const [me, wallet, lbl] = await Promise.all([api('/me'), api('/wallet'), api('/account-labels')]);
+    const u = me.user, labels = (lbl && lbl.labels) || {};
     document.getElementById('q-balance').textContent = parseFloat(wallet.balance).toFixed(2);
     document.getElementById('q-plan').innerHTML = u.unbilled
       ? '<span class="badge badge-violet">免余额</span>' : '<span class="badge badge-gray">计费</span>';
@@ -518,7 +524,7 @@ async function loadQuota() {
       ? models.map(m => `<span class="chip"><span class="dot"></span>${esc(m)}</span>`).join('')
       : '<span class="chip all">全部模型</span>';
     document.getElementById('q-accounts').innerHTML = accts.length
-      ? accts.map(a => `<span class="chip"><span class="dot"></span>${esc(String(a).replace(/\.json$/i,''))}</span>`).join('')
+      ? accts.map(a => `<span class="chip"><span class="dot"></span>${esc(labels[a] || '账号')}</span>`).join('')
       : '<span class="chip all">全部账号</span>';
   } catch(err) { if (err.status === 401) doLogout(); }
 }
@@ -747,7 +753,26 @@ async function loadAdmin() {
         <button class="btn btn-sm btn-ghost" onclick="openUserModal('${u.id}')">管理</button>
         <button class="btn btn-sm" onclick="document.getElementById('credit-uid').value='${u.id}'">选中</button></td>
     </tr>`).join('');
+    loadAdminAccounts();
   } catch(err) { if (err.status === 403) isAdmin = false; }
+}
+async function loadAdminAccounts() {
+  try {
+    const accounts = (await api('/admin/accounts')).accounts || [];
+    document.getElementById('admin-accounts').innerHTML = accounts.length ? accounts.map(a => `<tr>
+      <td>${esc(a.label || a.id)}</td><td>${esc(a.provider)}</td>
+      <td>${a.status && a.status!=='active' ? '<span class="badge badge-yellow">'+esc(a.status)+'</span>' : '<span class="badge badge-green">active</span>'}</td>
+      <td><input value="${esc(a.alias||'').replace(/"/g,'&quot;')}" data-id="${esc(a.id)}" placeholder="不填=Provider·短ID" style="min-width:150px"></td>
+      <td style="text-align:right"><button class="btn btn-sm btn-primary" onclick="saveAlias(this)">保存</button></td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">暂无上游账号</td></tr>';
+  } catch(e) {}
+}
+async function saveAlias(btn) {
+  const input = btn.closest('tr').querySelector('input[data-id]');
+  try {
+    await api('/admin/accounts/alias', {method:'POST', body: JSON.stringify({id: input.dataset.id, label: input.value.trim()})});
+    const o = btn.textContent; btn.textContent = '已保存'; setTimeout(() => btn.textContent = o, 1500);
+  } catch(err) { alert(err.message); }
 }
 function limitSummary(u) {
   const m = (u.allowed_models||[]).length, a = (u.allowed_auth_ids||[]).length;
