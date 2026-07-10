@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -290,18 +291,99 @@ func (m *Module) handleAccountQuota(c *gin.Context) {
 	defer cancel()
 	results := billing.FetchAccountQuotas(ctx, targets)
 
-	// Strip the raw auth id from the customer-facing payload.
 	out := make([]gin.H, 0, len(results))
 	for _, r := range results {
-		out = append(out, gin.H{
-			"provider": r.Provider,
-			"label":    r.Label,
-			"windows":  r.Windows,
-			"note":     r.Note,
-			"error":    r.Error,
-		})
+		out = append(out, accountQuotaView(r))
 	}
 	c.JSON(http.StatusOK, gin.H{"accounts": out})
+}
+
+// accountQuotaView is the customer-facing per-account payload. It exposes an
+// opaque handle (for refresh/reset) but never the raw credential id/email.
+func accountQuotaView(q billing.AccountQuota) gin.H {
+	return gin.H{
+		"handle":        billing.AccountHandle(q.AuthID),
+		"provider":      q.Provider,
+		"label":         q.Label,
+		"plan_type":     q.PlanType,
+		"details":       q.Details,
+		"windows":       q.Windows,
+		"reset_credits": q.ResetCredits,
+		"can_reset":     q.CanReset,
+		"note":          q.Note,
+		"error":         q.Error,
+	}
+}
+
+// accountForHandle resolves an opaque account handle back to a concrete upstream
+// account, restricted to the accounts the user is allowed to see. Returns the
+// raw id, provider and customer-safe label.
+func (m *Module) accountForHandle(ctx context.Context, user store.User, handle string) (id, provider, label string, ok bool) {
+	handle = strings.TrimSpace(handle)
+	if handle == "" {
+		return "", "", "", false
+	}
+	all := billing.Accounts()
+	providerByID := make(map[string]string, len(all))
+	for _, a := range all {
+		providerByID[a.ID] = a.Provider
+	}
+	ids := user.AllowedAuthIDs
+	if len(ids) == 0 {
+		ids = make([]string, 0, len(all))
+		for _, a := range all {
+			ids = append(ids, a.ID)
+		}
+	}
+	for _, candidate := range ids {
+		if billing.AccountHandle(candidate) == handle {
+			aliases, _ := m.store.AccountAliases(ctx)
+			return candidate, providerByID[candidate], billing.SafeAccountLabel(candidate, aliases), true
+		}
+	}
+	return "", "", "", false
+}
+
+// handleRefreshAccountQuota re-probes a single account's live quota.
+func (m *Module) handleRefreshAccountQuota(c *gin.Context) {
+	userID := userIDFromGin(c)
+	user, err := m.store.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	id, provider, label, ok := m.accountForHandle(c.Request.Context(), user, c.Param("handle"))
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), quotaLookupTimeout)
+	defer cancel()
+	c.JSON(http.StatusOK, accountQuotaView(billing.FetchAccountQuota(ctx, id, provider, label)))
+}
+
+// handleResetAccountCredit redeems one Codex rate-limit reset credit for the
+// account, then returns its refreshed quota. Codex accounts only.
+func (m *Module) handleResetAccountCredit(c *gin.Context) {
+	userID := userIDFromGin(c)
+	user, err := m.store.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	id, provider, label, ok := m.accountForHandle(c.Request.Context(), user, c.Param("handle"))
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), quotaLookupTimeout)
+	defer cancel()
+	if err := billing.ConsumeCodexResetCredit(ctx, id); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	m.notify(c.Request.Context(), fmt.Sprintf("♻️ 重置额度: 用户 %s 消耗了账号 %s 的一个重置额度", userID, label))
+	c.JSON(http.StatusOK, accountQuotaView(billing.FetchAccountQuota(ctx, id, provider, label)))
 }
 
 func userView(u store.User) gin.H {
