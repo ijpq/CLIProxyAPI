@@ -18,6 +18,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
 	sdkhandlers "github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
@@ -218,12 +219,79 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.Serv
 				}
 				return out
 			})
+			// Resolve an account's live bearer token (and Antigravity credits) so
+			// the portal 额度 page can query each upstream's own quota API.
+			billing.SetAuthResolver(func(id string) (billing.UpstreamAuth, bool) {
+				id = strings.TrimSpace(id)
+				if id == "" {
+					return billing.UpstreamAuth{}, false
+				}
+				for _, a := range mgr.List() {
+					if a == nil || a.ID != id {
+						continue
+					}
+					ua := billing.UpstreamAuth{
+						ID:       a.ID,
+						Provider: a.Provider,
+						ProxyURL: a.ProxyURL,
+						Token:    metadataAccessToken(a.Metadata),
+					}
+					if strings.EqualFold(strings.TrimSpace(a.Provider), "antigravity") {
+						if hint, ok := coreauth.GetAntigravityCreditsHint(a.ID); ok {
+							ua.AntigravityCredits = &billing.AntigravityCredits{
+								Known:           hint.Known,
+								Available:       hint.Available,
+								CreditAmount:    hint.CreditAmount,
+								MinCreditAmount: hint.MinCreditAmount,
+								UpdatedAt:       hint.UpdatedAt,
+							}
+						}
+					}
+					return ua, true
+				}
+				return billing.UpstreamAuth{}, false
+			})
 		}
 		group := engine.Group("/portal")
 		module.RegisterRoutes(group)
 		log.Info("billing portal routes mounted at /portal")
 	}
 	return []api.ServerOption{api.WithRouterConfigurator(configurator)}
+}
+
+// metadataAccessToken extracts the live bearer access token from a credential's
+// metadata, matching the precedence used by the management APICall ($TOKEN$).
+func metadataAccessToken(metadata map[string]any) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	for _, key := range []string{"access_token", "accessToken", "id_token"} {
+		if v, ok := metadata[key].(string); ok {
+			if v = strings.TrimSpace(v); v != "" {
+				return v
+			}
+		}
+	}
+	if tokenRaw, ok := metadata["token"]; ok {
+		switch typed := tokenRaw.(type) {
+		case string:
+			if v := strings.TrimSpace(typed); v != "" {
+				return v
+			}
+		case map[string]any:
+			if v, ok := typed["access_token"].(string); ok {
+				if v = strings.TrimSpace(v); v != "" {
+					return v
+				}
+			}
+			if v, ok := typed["accessToken"].(string); ok {
+				if v = strings.TrimSpace(v); v != "" {
+					return v
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // parseDurationDefault parses a duration string and returns def on empty or
