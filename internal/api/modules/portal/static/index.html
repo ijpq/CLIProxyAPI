@@ -120,6 +120,12 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
 .badge-blue{background:rgba(56,189,248,.13);color:#38bdf8;border-color:rgba(56,189,248,.25)}
 .badge-gray{background:var(--surface-2);color:var(--muted);border-color:var(--border-2)}
 .badge-violet{background:var(--accent-soft);color:var(--accent-2);border-color:rgba(99,102,241,.3)}
+.chips{display:flex;flex-wrap:wrap;gap:.5rem}
+.chip{display:inline-flex;align-items:center;gap:.4rem;padding:.4rem .75rem;border:1px solid var(--border-2);border-radius:99px;font-size:.82rem;background:var(--bg-2);font-weight:500}
+.chip.all{background:var(--accent-soft);border-color:rgba(99,102,241,.3);color:var(--accent-2)}
+.chip .dot{width:7px;height:7px;border-radius:50%;background:var(--accent-2);flex-shrink:0}
+.auth-alt{margin-top:1rem;text-align:center;font-size:.85rem}
+.auth-alt button{background:none;border:none;color:var(--accent-2);cursor:pointer;font-weight:600;font-size:.85rem}
 
 /* ---------- Topup ---------- */
 .methods-grid{display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.2rem}
@@ -172,6 +178,7 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
     <div class="seg">
       <button class="tab active" onclick="switchAuthTab('login')">登录</button>
       <button class="tab" onclick="switchAuthTab('register')">注册</button>
+      <button class="tab hidden" id="tab-code" onclick="switchAuthTab('code')">验证码</button>
     </div>
     <div id="auth-msg"></div>
     <form id="form-login" onsubmit="return doLogin(event)">
@@ -191,6 +198,14 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
       <div class="form-group"><label>昵称 (可选)</label><input type="text" id="reg-name"></div>
       <button class="btn btn-primary btn-block" type="submit">创建账号</button>
     </form>
+    <form id="form-code" class="hidden" onsubmit="return doCode(event)">
+      <div class="form-group"><label>邮箱</label><input type="email" id="code-email" autocomplete="username" required></div>
+      <div class="form-group hidden" id="code-step2"><label>验证码（已发送到邮箱，10 分钟内有效）</label>
+        <input id="code-input" inputmode="numeric" maxlength="6" placeholder="6 位验证码"></div>
+      <button class="btn btn-primary btn-block" type="submit" id="code-submit">发送验证码</button>
+      <div class="auth-alt hidden" id="code-resend"><button type="button" onclick="resetCode()">换个邮箱 / 重新发送</button></div>
+    </form>
+    <div class="auth-alt hidden" id="alt-code"><button type="button" onclick="switchAuthTab('code')">用邮箱验证码登录 →</button></div>
   </div>
 </div>
 
@@ -203,6 +218,7 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
       <a href="#keys" data-page="keys"><span class="ic">⚿</span>API Keys</a>
       <a href="#topup" data-page="topup"><span class="ic">＋</span>充值</a>
       <a href="#usage" data-page="usage"><span class="ic">▤</span>用量</a>
+      <a href="#quota" data-page="quota"><span class="ic">◈</span>额度</a>
       <a href="#settings" data-page="settings"><span class="ic">⚙</span>设置</a>
       <a href="#admin" data-page="admin" id="nav-admin" class="hidden"><span class="ic">★</span>管理</a>
     </nav>
@@ -267,6 +283,23 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
         <div class="table-wrap"><table><thead><tr><th>时间</th><th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th></tr></thead>
         <tbody id="usage-list"></tbody></table></div>
         <div style="margin-top:1rem;text-align:center"><button class="btn btn-ghost btn-sm" id="usage-more" onclick="loadMoreUsage()">加载更多</button></div>
+      </div>
+    </section>
+
+    <!-- Quota / entitlements -->
+    <section id="sec-quota" class="hidden">
+      <div class="page-head"><h2>我的额度</h2><p>你的余额、计费状态与可用范围（由管理员设置）</p></div>
+      <div class="stats">
+        <div class="stat-card"><div class="label">余额</div><div class="value" id="q-balance">-</div></div>
+        <div class="stat-card"><div class="label">计费状态</div><div class="value sm" id="q-plan">-</div></div>
+      </div>
+      <div class="card">
+        <h3>可用模型</h3>
+        <div id="q-models" class="chips"></div>
+      </div>
+      <div class="card">
+        <h3>可用账号</h3>
+        <div id="q-accounts" class="chips"></div>
       </div>
     </section>
 
@@ -368,10 +401,43 @@ function api(path, opts = {}) {
 // ---- Auth ----
 function switchAuthTab(tab) {
   document.querySelectorAll('.seg .tab').forEach(t => t.classList.remove('active'));
-  document.querySelector(`.tab[onclick*="${tab}"]`).classList.add('active');
+  const btn = document.querySelector(`.seg .tab[onclick*="'${tab}'"]`);
+  if (btn) btn.classList.add('active');
   document.getElementById('form-login').classList.toggle('hidden', tab !== 'login');
   document.getElementById('form-register').classList.toggle('hidden', tab !== 'register');
+  document.getElementById('form-code').classList.toggle('hidden', tab !== 'code');
   document.getElementById('auth-msg').innerHTML = '';
+  if (tab === 'code') resetCode();
+}
+
+// Email-code login (two phases: request code, then verify).
+let codeSent = false;
+function resetCode() {
+  codeSent = false;
+  document.getElementById('code-step2').classList.add('hidden');
+  document.getElementById('code-resend').classList.add('hidden');
+  document.getElementById('code-input').value = '';
+  document.getElementById('code-submit').textContent = '发送验证码';
+}
+async function doCode(e) {
+  e.preventDefault();
+  const email = document.getElementById('code-email').value.trim();
+  try {
+    if (!codeSent) {
+      await api('/login/code/request', {method:'POST', body: JSON.stringify({email})});
+      codeSent = true;
+      document.getElementById('code-step2').classList.remove('hidden');
+      document.getElementById('code-resend').classList.remove('hidden');
+      document.getElementById('code-submit').textContent = '登录';
+      document.getElementById('code-input').focus();
+      showAuthMsg('验证码已发送，请查收邮箱', true);
+    } else {
+      const code = document.getElementById('code-input').value.trim();
+      const r = await api('/login/code/verify', {method:'POST', body: JSON.stringify({email, code})});
+      token = r.token; localStorage.setItem('portal_token', token);
+      enterApp();
+    }
+  } catch(err) { showAuthMsg(err.message); }
 }
 function showAuthMsg(msg, ok) {
   document.getElementById('auth-msg').innerHTML = `<div class="msg ${ok ? 'msg-ok' : 'msg-error'}">${esc(msg)}</div>`;
@@ -435,7 +501,26 @@ function navigate(page) {
   else if (page === 'keys') loadKeys();
   else if (page === 'topup') loadTopup();
   else if (page === 'usage') { usageCursor = ''; loadUsage(true); loadUsageStats(); }
+  else if (page === 'quota') loadQuota();
   else if (page === 'admin') loadAdmin();
+}
+
+// My entitlements: balance, billing status, allowed models/accounts.
+async function loadQuota() {
+  try {
+    const [me, wallet] = await Promise.all([api('/me'), api('/wallet')]);
+    const u = me.user;
+    document.getElementById('q-balance').textContent = parseFloat(wallet.balance).toFixed(2);
+    document.getElementById('q-plan').innerHTML = u.unbilled
+      ? '<span class="badge badge-violet">免余额</span>' : '<span class="badge badge-gray">计费</span>';
+    const models = u.allowed_models || [], accts = u.allowed_auth_ids || [];
+    document.getElementById('q-models').innerHTML = models.length
+      ? models.map(m => `<span class="chip"><span class="dot"></span>${esc(m)}</span>`).join('')
+      : '<span class="chip all">全部模型</span>';
+    document.getElementById('q-accounts').innerHTML = accts.length
+      ? accts.map(a => `<span class="chip"><span class="dot"></span>${esc(String(a).replace(/\.json$/i,''))}</span>`).join('')
+      : '<span class="chip all">全部账号</span>';
+  } catch(err) { if (err.status === 401) doLogout(); }
 }
 window.addEventListener('hashchange', () => navigate(location.hash.slice(1)));
 
@@ -754,6 +839,14 @@ function copyText(id) {
 }
 
 // ---- Init ----
+// Reveal email-code login only when the server has SMTP configured.
+api('/config').then(cfg => {
+  if (cfg && cfg.email_login) {
+    document.getElementById('tab-code').classList.remove('hidden');
+    document.getElementById('alt-code').classList.remove('hidden');
+  }
+}).catch(() => {});
+
 if (token) {
   api('/me').then(() => enterApp()).catch(() => { token = null; localStorage.removeItem('portal_token'); document.getElementById('page-auth').classList.remove('hidden'); });
 } else {
