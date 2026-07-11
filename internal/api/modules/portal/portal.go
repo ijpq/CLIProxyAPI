@@ -30,6 +30,7 @@ type Store interface {
 	RevokeAPIKey(ctx context.Context, userID, keyID string) error
 	GetWalletBalance(ctx context.Context, userID string) (string, error)
 	ListUsage(ctx context.Context, userID string, before time.Time, limit int) ([]store.UsageRecord, error)
+	ListAllUsage(ctx context.Context, before time.Time, limit int) ([]store.UsageRecord, error)
 
 	UpdateUserPassword(ctx context.Context, userID, newPasswordHash string) error
 
