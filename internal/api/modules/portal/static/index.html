@@ -313,7 +313,7 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
       <div class="page-head"><h2>用量明细</h2><p>每条请求的 token、费用与实际服务它的上游账号</p></div>
       <div class="stats" id="usage-charts"></div>
       <div class="card">
-        <div class="table-wrap"><table><thead><tr><th>时间</th><th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th></tr></thead>
+        <div class="table-wrap"><table><thead><tr id="usage-thead"><th>时间</th><th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th></tr></thead>
         <tbody id="usage-list"></tbody></table></div>
         <div style="margin-top:1rem;text-align:center"><button class="btn btn-ghost btn-sm" id="usage-more" onclick="loadMoreUsage()">加载更多</button></div>
       </div>
@@ -795,26 +795,38 @@ function renderTopupOrders(orders) {
 async function viewOrder(id) { try { showOrderDetail(await api('/topup/' + id)); } catch(err) { alert(err.message); } }
 
 // ---- Usage ----
+let usageShowUser = false;
 async function loadUsage(reset) {
-  if (reset) { usageCursor = ''; document.getElementById('usage-list').innerHTML = ''; }
+  const tbody = document.getElementById('usage-list');
+  if (reset) { usageCursor = ''; tbody.innerHTML = ''; }
   try {
     let url = '/usage?limit=50';
     if (usageCursor) url += '&before=' + encodeURIComponent(usageCursor);
     const r = await api(url);
-    const tbody = document.getElementById('usage-list');
-    if (!r.records.length) {
-      if (reset) tbody.innerHTML = '<tr><td colspan="10" class="empty">暂无记录</td></tr>';
+    const records = (r && r.records) || [];
+    usageShowUser = !!(r && r.scope === 'all');
+    const cols = usageShowUser ? 11 : 10;
+    if (reset) {
+      document.getElementById('usage-thead').innerHTML =
+        `<th>时间</th>${usageShowUser ? '<th>用户</th>' : ''}<th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th>`;
+    }
+    if (!records.length) {
+      if (reset) tbody.innerHTML = `<tr><td colspan="${cols}" class="empty">暂无记录</td></tr>`;
       document.getElementById('usage-more').classList.add('hidden'); return;
     }
     document.getElementById('usage-more').classList.remove('hidden');
-    tbody.innerHTML += r.records.map(u => `<tr>
-      <td>${fmtTime(u.created_at)}</td><td>${esc(u.provider)}</td><td>${esc(u.model)}</td>
+    tbody.innerHTML += records.map(u => `<tr>
+      <td>${fmtTime(u.created_at)}</td>${usageShowUser ? `<td>${esc(u.user_email || '-')}</td>` : ''}<td>${esc(u.provider)}</td><td>${esc(u.model)}</td>
       <td>${esc(u.auth_label || u.auth_id || '-')}</td>
       <td>${u.input_tokens}</td><td>${u.output_tokens}</td><td>${u.cache_read_tokens}</td><td>${u.cache_write_tokens}</td>
       <td>${parseFloat(u.cost).toFixed(4)}</td><td>${statusBadge(u.status)}</td></tr>`).join('');
-    usageCursor = r.records[r.records.length - 1].created_at;
-    if (r.records.length < 50) document.getElementById('usage-more').classList.add('hidden');
-  } catch(err) { if (err.status === 401) doLogout(); }
+    usageCursor = records[records.length - 1].created_at;
+    if (records.length < 50) document.getElementById('usage-more').classList.add('hidden');
+  } catch(err) {
+    if (err.status === 401) { doLogout(); return; }
+    if (reset) tbody.innerHTML = `<tr><td colspan="11" class="empty">加载失败：${esc(err.message || '未知错误')}</td></tr>`;
+    document.getElementById('usage-more').classList.add('hidden');
+  }
 }
 function loadMoreUsage() { loadUsage(false); }
 

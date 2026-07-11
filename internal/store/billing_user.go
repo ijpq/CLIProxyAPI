@@ -60,6 +60,9 @@ type UsageRecord struct {
 	AuthID           string
 	AuthLabel        string
 	CreatedAt        time.Time
+	// UserEmail is populated only by admin-wide listings (ListAllUsage); it is
+	// empty for a single user's own ListUsage.
+	UserEmail string
 }
 
 // rowScanner is satisfied by both *sql.Row and *sql.Rows so scanUser can serve
@@ -327,6 +330,59 @@ func (s *PostgresStore) ListUsage(ctx context.Context, userID string, before tim
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("postgres store: iterate usage: %w", err)
+	}
+	return out, nil
+}
+
+// ListAllUsage returns usage across all users (admin view), each row annotated
+// with the owning user's email. Ordering and pagination match ListUsage.
+func (s *PostgresStore) ListAllUsage(ctx context.Context, before time.Time, limit int) ([]UsageRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("postgres store: not initialized")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	args := []any{}
+	whereTime := ""
+	if !before.IsZero() {
+		whereTime = " WHERE ur.created_at < $1"
+		args = append(args, before)
+	}
+	args = append(args, limit)
+	limitIdx := len(args)
+
+	query := fmt.Sprintf(`
+		SELECT ur.id, ur.api_key_id, ur.request_id, ur.provider, ur.model,
+		       ur.input_tokens, ur.output_tokens, ur.cache_read_tokens, ur.cache_write_tokens,
+		       ur.cost::text, ur.status, ur.error_message, ur.auth_id, ur.auth_label, ur.created_at,
+		       COALESCE(u.email, '')
+		FROM %s ur
+		LEFT JOIN %s u ON u.id = ur.user_id%s
+		ORDER BY ur.created_at DESC
+		LIMIT $%d
+	`, s.fullTableName(BillingUsageRecordsTable), s.fullTableName(BillingUsersTable), whereTime, limitIdx)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("postgres store: list all usage: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]UsageRecord, 0, limit)
+	for rows.Next() {
+		var rec UsageRecord
+		if err := rows.Scan(
+			&rec.ID, &rec.APIKeyID, &rec.RequestID, &rec.Provider, &rec.Model,
+			&rec.InputTokens, &rec.OutputTokens, &rec.CacheReadTokens, &rec.CacheWriteTokens,
+			&rec.Cost, &rec.Status, &rec.ErrorMessage, &rec.AuthID, &rec.AuthLabel, &rec.CreatedAt,
+			&rec.UserEmail,
+		); err != nil {
+			return nil, fmt.Errorf("postgres store: scan all usage: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres store: iterate all usage: %w", err)
 	}
 	return out, nil
 }
