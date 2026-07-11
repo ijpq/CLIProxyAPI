@@ -165,7 +165,16 @@ func (m *Module) handleUsage(c *gin.Context) {
 		}
 	}
 
-	records, err := m.store.ListUsage(c.Request.Context(), userID, before, limit)
+	// The super admin sees usage across all users (with each row's owner);
+	// everyone else sees only their own.
+	admin := isAdminFromGin(c)
+	var records []store.UsageRecord
+	var err error
+	if admin {
+		records, err = m.store.ListAllUsage(c.Request.Context(), before, limit)
+	} else {
+		records, err = m.store.ListUsage(c.Request.Context(), userID, before, limit)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "usage lookup failed"})
 		return
@@ -174,7 +183,7 @@ func (m *Module) handleUsage(c *gin.Context) {
 	for _, r := range records {
 		out = append(out, usageView(r))
 	}
-	c.JSON(http.StatusOK, gin.H{"records": out})
+	c.JSON(http.StatusOK, gin.H{"records": out, "scope": map[bool]string{true: "all", false: "self"}[admin]})
 }
 
 func (m *Module) handleListKeys(c *gin.Context) {
@@ -438,6 +447,7 @@ func usageView(r store.UsageRecord) gin.H {
 	return gin.H{
 		"id":                 r.ID,
 		"api_key_id":         nullableString(r.APIKeyID),
+		"user_email":         r.UserEmail,
 		"request_id":         r.RequestID,
 		"provider":           r.Provider,
 		"model":              r.Model,
