@@ -166,8 +166,15 @@ func (m *Module) handleUsage(c *gin.Context) {
 	}
 
 	// The super admin sees usage across all users (with each row's owner);
-	// everyone else sees only their own.
+	// everyone else sees only their own. Trust the JWT admin claim on the fast
+	// path, but fall back to the DB so a token issued before the account was
+	// promoted (BILLING_ADMIN_EMAIL) still gets the admin-wide view.
 	admin := isAdminFromGin(c)
+	if !admin {
+		if u, errUser := m.store.GetUserByID(c.Request.Context(), userID); errUser == nil && u.IsAdmin {
+			admin = true
+		}
+	}
 	var records []store.UsageRecord
 	var err error
 	if admin {
