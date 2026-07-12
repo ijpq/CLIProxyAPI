@@ -64,7 +64,12 @@ func (p *MeterPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	userID := UserIDFromContext(ctx)
 	if userID == "" {
 		// Request was authenticated through a non-billing provider (legacy
-		// config-api-key, internal management); nothing to meter.
+		// config-api-key, internal management); nothing to meter. Logged at
+		// debug so operators can confirm why a request produced no usage row.
+		log.WithFields(log.Fields{
+			"provider": record.Provider,
+			"model":    record.Model,
+		}).Debug("billing: skip metering (no billing user in request context)")
 		return
 	}
 
@@ -117,16 +122,18 @@ func (p *MeterPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 		log.WithError(err).Errorf("billing: record usage for user %s failed", userID)
 		return
 	}
-	if unbilled {
-		// Audit trail: which user/key drew from which upstream account.
-		log.WithFields(log.Fields{
-			"user":     userID,
-			"account":  authID,
-			"label":    authLabel,
-			"provider": record.Provider,
-			"model":    record.Model,
-		}).Info("billing: unbilled request served")
-	}
+	// Audit trail (every metered request): which user/key drew from which
+	// upstream account, and whether it was billed. Also the definitive signal
+	// that a usage row was written.
+	log.WithFields(log.Fields{
+		"user":     userID,
+		"account":  authID,
+		"label":    authLabel,
+		"provider": record.Provider,
+		"model":    record.Model,
+		"cost":     fmt.Sprintf("%.6f", cost),
+		"unbilled": unbilled,
+	}).Info("billing: request metered")
 	if p.invalidator != nil {
 		p.invalidator(userID)
 	}
