@@ -1077,6 +1077,79 @@ func TestCodexWebsocketsUpstreamDisconnectChanSignalsOnInvalidate(t *testing.T) 
 	}
 }
 
+func TestCodexWebsocketsExecuteStreamCancellationClosesDedicatedUpstream(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	waitingForClose := make(chan struct{})
+	upstreamClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, errUpgrade := upgrader.Upgrade(w, r, nil)
+		if errUpgrade != nil {
+			t.Errorf("upgrade websocket: %v", errUpgrade)
+			return
+		}
+		defer func() {
+			if errClose := conn.Close(); errClose != nil {
+				t.Errorf("close websocket: %v", errClose)
+			}
+		}()
+		if _, _, errRead := conn.ReadMessage(); errRead != nil {
+			t.Errorf("read request websocket message: %v", errRead)
+			return
+		}
+		close(waitingForClose)
+		if _, _, errRead := conn.ReadMessage(); errRead == nil {
+			t.Error("expected client cancellation to close upstream websocket")
+		}
+		close(upstreamClosed)
+	}))
+	defer server.Close()
+
+	exec := NewCodexWebsocketsExecutor(&config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationAll}})
+	auth := &cliproxyauth.Auth{ID: "auth-1", Attributes: map[string]string{"api_key": "sk-test", "base_url": server.URL}}
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5-codex",
+		Payload: []byte(`{"model":"gpt-5-codex","input":"hello"}`),
+	}
+	opts := cliproxyexecutor.Options{
+		SourceFormat:   sdktranslator.FromString("openai-response"),
+		ResponseFormat: sdktranslator.FromString("openai-response"),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result, errExecute := exec.ExecuteStream(ctx, auth, req, opts)
+	if errExecute != nil {
+		t.Fatalf("ExecuteStream() error = %v", errExecute)
+	}
+	select {
+	case <-waitingForClose:
+	case <-time.After(time.Second):
+		t.Fatal("upstream did not receive websocket request")
+	}
+	select {
+	case <-upstreamClosed:
+		t.Fatal("upstream websocket closed before context cancellation")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	cancel()
+	chunksClosed := make(chan struct{})
+	go func() {
+		for range result.Chunks {
+		}
+		close(chunksClosed)
+	}()
+	select {
+	case <-chunksClosed:
+	case <-time.After(time.Second):
+		t.Fatal("stream chunks remained open after context cancellation")
+	}
+
+	select {
+	case <-upstreamClosed:
+	case <-time.After(time.Second):
+		t.Fatal("upstream websocket remained open after context cancellation")
+	}
+}
+
 func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) {
 	headers := applyCodexWebsocketHeaders(context.Background(), http.Header{}, nil, "", nil)
 

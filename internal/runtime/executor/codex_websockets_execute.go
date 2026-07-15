@@ -182,6 +182,12 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 				log.Errorf("codex websockets executor: close websocket error: %v", errClose)
 			}
 		}()
+	} else {
+		defer func() {
+			if ctx.Err() != nil {
+				e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, "context_done", ctx.Err())
+			}
+		}()
 	}
 
 	var readCh chan codexWebsocketRead

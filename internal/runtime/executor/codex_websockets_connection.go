@@ -128,8 +128,18 @@ func readCodexWebsocketMessage(ctx context.Context, sess *codexWebsocketSession,
 		if conn == nil {
 			return 0, nil, fmt.Errorf("codex websockets executor: websocket conn is nil")
 		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		stopClose := context.AfterFunc(ctx, func() {
+			_ = conn.Close()
+		})
+		defer stopClose()
 		_ = conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout))
 		msgType, payload, errRead := conn.ReadMessage()
+		if errRead != nil && ctx.Err() != nil {
+			return 0, nil, ctx.Err()
+		}
 		return msgType, payload, errRead
 	}
 	if conn == nil {

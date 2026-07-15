@@ -416,12 +416,62 @@ func TestForwardImagesStreamCancelsWithPayloadError(t *testing.T) {
 	var canceled error
 	firstChunk := []byte("event: error\ndata: {\"error\":{\"message\":\"token=image-secret\"}}\n\n")
 
-	h.forwardImagesStream(context.Background(), c, flusher, func(err error) { canceled = err }, data, errs, firstChunk, "b64_json", "image_generation", func(string, []byte) {})
+	h.forwardImagesStream(context.Background(), c, flusher, func(err error) { canceled = err }, data, errs, firstChunk, "b64_json", "image_generation", func(string, []byte) error { return nil })
 	if canceled == nil || strings.Contains(canceled.Error(), "image-secret") || !strings.Contains(canceled.Error(), "[REDACTED]") {
 		t.Fatalf("payload error cancel = %v body=%q", canceled, recorder.Body.String())
 	}
 	if !strings.Contains(recorder.Body.String(), "event: error") {
 		t.Fatalf("payload error event missing: %q", recorder.Body.String())
+	}
+}
+
+func TestForwardImagesStreamRejectsCloseBeforeCompletion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewOpenAIAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil))
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		t.Fatal("expected gin writer to implement http.Flusher")
+	}
+	data := make(chan []byte)
+	close(data)
+	errs := make(chan *interfaces.ErrorMessage)
+	close(errs)
+	var canceled error
+	firstChunk := []byte("event: response.image_generation_call.partial_image\ndata: {\"type\":\"response.image_generation_call.partial_image\",\"partial_image_b64\":\"aW1hZ2U=\"}\n\n")
+
+	h.forwardImagesStream(context.Background(), c, flusher, func(err error) { canceled = err }, data, errs, firstChunk, "b64_json", "image_generation", func(string, []byte) error { return nil })
+	if canceled == nil || !strings.Contains(canceled.Error(), "stream disconnected before completion") {
+		t.Fatalf("truncated image stream cancel = %v body=%q", canceled, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "event: error") {
+		t.Fatalf("truncated image stream error event missing: %q", recorder.Body.String())
+	}
+}
+
+func TestForwardImagesStreamCancelsOnEventWriteError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewOpenAIAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil))
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		t.Fatal("expected gin writer to implement http.Flusher")
+	}
+	data := make(chan []byte)
+	close(data)
+	errs := make(chan *interfaces.ErrorMessage)
+	close(errs)
+	writeErr := errors.New("client connection closed")
+	var canceled error
+	firstChunk := []byte("event: response.image_generation_call.partial_image\ndata: {\"type\":\"response.image_generation_call.partial_image\",\"partial_image_b64\":\"aW1hZ2U=\"}\n\n")
+
+	h.forwardImagesStream(context.Background(), c, flusher, func(err error) { canceled = err }, data, errs, firstChunk, "b64_json", "image_generation", func(string, []byte) error { return writeErr })
+	if !errors.Is(canceled, writeErr) {
+		t.Fatalf("image event write cancel = %v, want %v", canceled, writeErr)
 	}
 }
 

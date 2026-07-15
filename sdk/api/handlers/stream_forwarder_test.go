@@ -56,8 +56,9 @@ func TestForwardStreamNormalizesErrorBeforeWriteAndCancel(t *testing.T) {
 		NormalizeTerminalError: func(errMsg *interfaces.ErrorMessage) *interfaces.ErrorMessage {
 			return &interfaces.ErrorMessage{StatusCode: errMsg.StatusCode, Error: errors.New("safe error")}
 		},
-		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) {
+		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) error {
 			written = errMsg.Error.Error()
+			return nil
 		},
 	})
 
@@ -80,5 +81,32 @@ func TestPendingStreamErrorIgnoresUnavailableErrors(t *testing.T) {
 				t.Fatalf("PendingStreamError() = (%#v, %t), want (nil, false)", got, ok)
 			}
 		})
+	}
+}
+
+func TestForwardStreamCancelsOnChunkWriteError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+
+	data := make(chan []byte, 1)
+	data <- []byte("chunk")
+	close(data)
+	errs := make(chan *interfaces.ErrorMessage)
+	writeErr := errors.New("client connection closed")
+	var canceledWith error
+
+	h := &BaseAPIHandler{}
+	h.ForwardStream(c, recorder, func(err error) {
+		canceledWith = err
+	}, data, errs, StreamForwardOptions{
+		WriteChunk: func([]byte) error {
+			return writeErr
+		},
+	})
+
+	if !errors.Is(canceledWith, writeErr) {
+		t.Fatalf("cancel error = %v, want %v", canceledWith, writeErr)
 	}
 }
