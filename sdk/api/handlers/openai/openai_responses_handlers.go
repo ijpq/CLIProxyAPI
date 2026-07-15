@@ -72,19 +72,20 @@ type responsesSSEFramer struct {
 	failureEvent         string
 	isCodexClient        bool
 	dataFrames           int
-	writeErr             error
 	canComplete          func() bool
 }
 
-func (f *responsesSSEFramer) WriteChunk(w io.Writer, chunk []byte) {
+func (f *responsesSSEFramer) WriteChunk(w io.Writer, chunk []byte) error {
 	if len(chunk) == 0 || f.terminalEvent != "" {
-		return
+		return nil
 	}
 	if responsesSSEStartsNewDataFrame(f.pending, chunk) {
-		f.writeFrame(w, f.pending)
+		if errWrite := f.writeFrame(w, f.pending); errWrite != nil {
+			return errWrite
+		}
 		f.pending = f.pending[:0]
 		if f.terminalEvent != "" {
-			return
+			return nil
 		}
 	}
 	if responsesSSENeedsLineBreak(f.pending, chunk) {
@@ -96,45 +97,51 @@ func (f *responsesSSEFramer) WriteChunk(w io.Writer, chunk []byte) {
 		if frameLen == 0 {
 			break
 		}
-		f.writeFrame(w, f.pending[:frameLen])
+		if errWrite := f.writeFrame(w, f.pending[:frameLen]); errWrite != nil {
+			return errWrite
+		}
 		copy(f.pending, f.pending[frameLen:])
 		f.pending = f.pending[:len(f.pending)-frameLen]
 		if f.terminalEvent != "" {
 			f.pending = f.pending[:0]
-			return
+			return nil
 		}
 	}
 	if len(bytes.TrimSpace(f.pending)) == 0 {
 		f.pending = f.pending[:0]
-		return
+		return nil
 	}
 	if len(f.pending) == 0 || !responsesSSECanEmitWithoutDelimiter(f.pending) {
-		return
+		return nil
 	}
-	f.writeFrame(w, f.pending)
+	if errWrite := f.writeFrame(w, f.pending); errWrite != nil {
+		return errWrite
+	}
 	f.pending = f.pending[:0]
+	return nil
 }
 
-func (f *responsesSSEFramer) Flush(w io.Writer) {
+func (f *responsesSSEFramer) Flush(w io.Writer) error {
 	if len(f.pending) == 0 || f.terminalEvent != "" {
-		return
+		return nil
 	}
 	if len(bytes.TrimSpace(f.pending)) == 0 {
 		f.pending = f.pending[:0]
-		return
+		return nil
 	}
 	if !responsesSSECanFlushWithoutDelimiter(f.pending) {
 		f.pending = f.pending[:0]
-		return
+		return nil
 	}
-	f.writeFrame(w, f.pending)
+	if errWrite := f.writeFrame(w, f.pending); errWrite != nil {
+		return errWrite
+	}
 	f.pending = f.pending[:0]
+	return nil
 }
 
-func (f *responsesSSEFramer) writeFrame(w io.Writer, frame []byte) {
-	if f.writeErr == nil {
-		f.writeErr = writeResponsesSSEChunk(w, f.repairFrame(frame))
-	}
+func (f *responsesSSEFramer) writeFrame(w io.Writer, frame []byte) error {
+	return writeResponsesSSEChunk(w, f.repairFrame(frame))
 }
 
 func (f *responsesSSEFramer) shouldFilterPrivateEvent(streamEvent, payloadType string) bool {
@@ -754,7 +761,10 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 				errChan = nil
 				continue
 			}
-			framer.Flush(&initialOutput)
+			if errWrite := framer.Flush(&initialOutput); errWrite != nil {
+				cliCancel(errWrite)
+				return
+			}
 			safeErrMsg := sanitizeResponsesStreamErrorMessage(errMsg)
 			if framer.dataFrames == 0 {
 				safeErrMsg = sanitizeResponsesInitialErrorMessage(errMsg)
@@ -787,7 +797,10 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 			return
 		case chunk, ok := <-dataChan:
 			if !ok {
-				framer.Flush(&initialOutput)
+				if errWrite := framer.Flush(&initialOutput); errWrite != nil {
+					cliCancel(errWrite)
+					return
+				}
 				errMsg, hasPendingError := handlers.PendingStreamError(errChan)
 				if !hasPendingError && framer.terminalEvent == "" {
 					message := "upstream stream closed before first payload"
@@ -839,7 +852,10 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 				return
 			}
 
-			framer.WriteChunk(&initialOutput, chunk)
+			if errWrite := framer.WriteChunk(&initialOutput, chunk); errWrite != nil {
+				cliCancel(errWrite)
+				return
+			}
 			if framer.dataFrames == 0 {
 				continue
 			}
@@ -1059,10 +1075,6 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 		framer.isCodexClient = false
 	}
 	// Initial frames have already been written and flushed by the caller.
-	if framer.writeErr != nil {
-		cancel(framer.writeErr)
-		return
-	}
 	if framer.canComplete != nil && framer.canComplete() && framer.terminalEvent == "response.completed" && framer.terminalError == nil {
 		if errMsg, pending := handlers.PendingStreamError(errs); pending {
 			h.logResponsesStreamError(c, framer, sanitizeResponsesStreamErrorMessage(errMsg))
@@ -1070,10 +1082,12 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 		cancel(nil)
 		return
 	}
-	writeTerminalError := func(errMsg *interfaces.ErrorMessage) {
-		framer.Flush(c.Writer)
+	writeTerminalError := func(errMsg *interfaces.ErrorMessage) error {
+		if errWrite := framer.Flush(c.Writer); errWrite != nil {
+			return errWrite
+		}
 		if errMsg == nil {
-			return
+			return nil
 		}
 		status := http.StatusInternalServerError
 		if errMsg.StatusCode > 0 {
@@ -1082,7 +1096,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 		errText := responsesStreamErrorText(errMsg, status)
 		h.logResponsesStreamError(c, framer, errMsg)
 		if framer.terminalEvent != "" {
-			return
+			return nil
 		}
 		seq := 0
 		if framer != nil {
@@ -1093,26 +1107,24 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 		}
 		if isCodexResponsesClientRequest(c) {
 			chunk := handlers.BuildOpenAIResponsesStreamFailedChunk(status, errText, seq)
-			_, _ = fmt.Fprintf(c.Writer, "\nevent: response.failed\ndata: %s\n\n", string(chunk))
-			return
+			_, errWrite := fmt.Fprintf(c.Writer, "\nevent: response.failed\ndata: %s\n\n", string(chunk))
+			return errWrite
 		}
 		chunk := handlers.BuildOpenAIResponsesStreamErrorChunk(status, errText, seq)
-		_, _ = fmt.Fprintf(c.Writer, "\nevent: error\ndata: %s\n\n", string(chunk))
+		_, errWrite := fmt.Fprintf(c.Writer, "\nevent: error\ndata: %s\n\n", string(chunk))
+		return errWrite
 	}
 
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
 		NormalizeTerminalError: sanitizeResponsesStreamErrorMessage,
 		Flush:                  func() error { return flushResponsesSSE(c.Writer) },
-		WriteChunk: func(chunk []byte) {
-			framer.WriteChunk(c.Writer, chunk)
+		WriteChunk: func(chunk []byte) error {
+			return framer.WriteChunk(c.Writer, chunk)
 		},
 		ChunkDone: func() bool {
-			return framer.canComplete != nil && framer.canComplete() && framer.terminalEvent == "response.completed" && framer.writeErr == nil
+			return framer.canComplete != nil && framer.canComplete() && framer.terminalEvent == "response.completed"
 		},
 		ChunkError: func() *interfaces.ErrorMessage {
-			if framer.writeErr != nil {
-				return &interfaces.ErrorMessage{Error: framer.writeErr}
-			}
 			if framer.terminalError != nil {
 				h.logResponsesStreamError(c, framer, framer.terminalError)
 			}
@@ -1120,9 +1132,8 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 		},
 		WriteTerminalError: writeTerminalError,
 		CloseError: func() *interfaces.ErrorMessage {
-			framer.Flush(c.Writer)
-			if framer.writeErr != nil {
-				return &interfaces.ErrorMessage{Error: framer.writeErr}
+			if errWrite := framer.Flush(c.Writer); errWrite != nil {
+				return &interfaces.ErrorMessage{StatusCode: http.StatusInternalServerError, Error: errWrite}
 			}
 			if framer.terminalError != nil {
 				return framer.terminalError
@@ -1139,9 +1150,12 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 				Error:      fmt.Errorf("upstream stream closed before a terminal event (last event: %s)", lastEvent),
 			}
 		},
-		WriteDone: func() {
-			framer.Flush(c.Writer)
-			_, _ = c.Writer.Write([]byte("\n"))
+		WriteDone: func() error {
+			if errWrite := framer.Flush(c.Writer); errWrite != nil {
+				return errWrite
+			}
+			_, errWrite := c.Writer.Write([]byte("\n"))
+			return errWrite
 		},
 	})
 }
