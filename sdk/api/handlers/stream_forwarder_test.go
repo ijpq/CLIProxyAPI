@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -315,5 +316,32 @@ func TestStartContinuityWaitKeepAliveForPeekSuppressesQueuedTickAfterWaitEnds(t 
 	}
 	if wroteStale {
 		t.Fatal("expected queued peek keepalive tick to be suppressed after continuity wait ended")
+	}
+}
+
+func TestForwardStreamCancelsOnChunkWriteError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+
+	data := make(chan []byte, 1)
+	data <- []byte("chunk")
+	close(data)
+	errs := make(chan *interfaces.ErrorMessage)
+	writeErr := errors.New("client connection closed")
+	var canceledWith error
+
+	h := &BaseAPIHandler{}
+	h.ForwardStream(c, recorder, func(err error) {
+		canceledWith = err
+	}, data, errs, StreamForwardOptions{
+		WriteChunk: func([]byte) error {
+			return writeErr
+		},
+	})
+
+	if !errors.Is(canceledWith, writeErr) {
+		t.Fatalf("cancel error = %v, want %v", canceledWith, writeErr)
 	}
 }
