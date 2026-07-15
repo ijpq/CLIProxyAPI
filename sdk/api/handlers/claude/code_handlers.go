@@ -335,7 +335,10 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 			streamState.trailingNewlines = 2
 			streamState.ObserveChunk(chunk)
 			if len(chunk) > 0 {
-				_, _ = c.Writer.Write(chunk)
+				if _, errWrite := c.Writer.Write(chunk); errWrite != nil {
+					cliCancel(errWrite)
+					return
+				}
 				flusher.Flush()
 			}
 
@@ -391,17 +394,22 @@ func (s *claudeSSEStreamState) flushEventData() {
 	}
 }
 
-func (s *claudeSSEStreamState) ensureSSEEventBoundary(w io.Writer) {
+func (s *claudeSSEStreamState) ensureSSEEventBoundary(w io.Writer) error {
 	if s.sawBareMessageJSON {
-		return
+		return nil
 	}
+	var errWrite error
 	switch s.trailingNewlines {
 	case 0:
-		_, _ = w.Write([]byte("\n\n"))
+		_, errWrite = w.Write([]byte("\n\n"))
 	case 1:
-		_, _ = w.Write([]byte("\n"))
+		_, errWrite = w.Write([]byte("\n"))
+	}
+	if errWrite != nil {
+		return errWrite
 	}
 	s.trailingNewlines = 2
+	return nil
 }
 
 func (s *claudeSSEStreamState) observeLine(line []byte) {
@@ -477,26 +485,29 @@ func (h *ClaudeCodeAPIHandler) forwardClaudeStreamWithState(c *gin.Context, flus
 		state = &claudeSSEStreamState{trailingNewlines: 2}
 	}
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
-		WriteChunk: func(chunk []byte) {
+		WriteChunk: func(chunk []byte) error {
 			if len(chunk) == 0 {
-				return
+				return nil
 			}
 			state.ObserveChunk(chunk)
-			_, _ = c.Writer.Write(chunk)
+			_, errWrite := c.Writer.Write(chunk)
+			return errWrite
 		},
-		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) {
+		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) error {
 			state.FlushPendingLine()
 			if errMsg == nil {
-				return
+				return nil
 			}
 			if state.sawErrorEvent {
-				state.ensureSSEEventBoundary(c.Writer)
-				return
+				return state.ensureSSEEventBoundary(c.Writer)
 			}
-			state.ensureSSEEventBoundary(c.Writer)
+			if errWrite := state.ensureSSEEventBoundary(c.Writer); errWrite != nil {
+				return errWrite
+			}
 
 			errorBytes, _ := json.Marshal(h.toClaudeError(errMsg))
-			_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errorBytes)
+			_, errWrite := fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errorBytes)
+			return errWrite
 		},
 		CloseError: func() *interfaces.ErrorMessage {
 			state.FlushPendingLine()
@@ -508,11 +519,12 @@ func (h *ClaudeCodeAPIHandler) forwardClaudeStreamWithState(c *gin.Context, flus
 				Error:      fmt.Errorf("upstream stream closed before message_stop"),
 			}
 		},
-		WriteDone: func() {
+		WriteDone: func() error {
 			state.FlushPendingLine()
 			if state.sawMessageStop || state.sawErrorEvent {
-				state.ensureSSEEventBoundary(c.Writer)
+				return state.ensureSSEEventBoundary(c.Writer)
 			}
+			return nil
 		},
 	})
 }
