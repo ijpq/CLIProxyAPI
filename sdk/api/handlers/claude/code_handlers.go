@@ -290,7 +290,10 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 
 			// Write the first chunk
 			if len(chunk) > 0 {
-				_, _ = c.Writer.Write(chunk)
+				if _, errWrite := c.Writer.Write(chunk); errWrite != nil {
+					cliCancel(errWrite)
+					return
+				}
 				flusher.Flush()
 			}
 
@@ -303,15 +306,16 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 
 func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
-		WriteChunk: func(chunk []byte) {
+		WriteChunk: func(chunk []byte) error {
 			if len(chunk) == 0 {
-				return
+				return nil
 			}
-			_, _ = c.Writer.Write(chunk)
+			_, errWrite := c.Writer.Write(chunk)
+			return errWrite
 		},
-		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) {
+		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) error {
 			if errMsg == nil {
-				return
+				return nil
 			}
 			status := http.StatusInternalServerError
 			if errMsg.StatusCode > 0 {
@@ -320,7 +324,8 @@ func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.
 			c.Status(status)
 
 			errorBytes, _ := json.Marshal(h.toClaudeError(errMsg))
-			_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errorBytes)
+			_, errWrite := fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errorBytes)
+			return errWrite
 		},
 	})
 }

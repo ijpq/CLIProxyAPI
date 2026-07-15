@@ -153,13 +153,28 @@ func (h *GeminiAPIHandler) handleInteractionsStream(c *gin.Context, cliCtx conte
 	go func() {
 		defer close(data)
 		defer close(errs)
-		for chunk := range stream.Chunks {
-			if chunk.Err != nil {
-				errs <- &interfaces.ErrorMessage{StatusCode: chunk.Err.StatusCode, Error: chunk.Err}
+		for {
+			select {
+			case <-cliCtx.Done():
 				return
-			}
-			if len(chunk.Payload) > 0 {
-				data <- chunk.Payload
+			case chunk, okChunk := <-stream.Chunks:
+				if !okChunk {
+					return
+				}
+				if chunk.Err != nil {
+					select {
+					case <-cliCtx.Done():
+					case errs <- &interfaces.ErrorMessage{StatusCode: chunk.Err.StatusCode, Error: chunk.Err}:
+					}
+					return
+				}
+				if len(chunk.Payload) > 0 {
+					select {
+					case <-cliCtx.Done():
+						return
+					case data <- chunk.Payload:
+					}
+				}
 			}
 		}
 	}()
@@ -168,24 +183,25 @@ func (h *GeminiAPIHandler) handleInteractionsStream(c *gin.Context, cliCtx conte
 
 func (h *GeminiAPIHandler) forwardInteractionsStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
-		WriteChunk: func(chunk []byte) {
+		WriteChunk: func(chunk []byte) error {
 			if len(chunk) == 0 {
-				return
+				return nil
 			}
 			trimmed := bytes.TrimSpace(chunk)
-			if bytes.HasPrefix(trimmed, []byte("event:")) || bytes.HasPrefix(trimmed, []byte("data:")) {
-				_, _ = c.Writer.Write(chunk)
-			} else {
-				_, _ = c.Writer.Write([]byte("data: "))
-				_, _ = c.Writer.Write(chunk)
+			frame := make([]byte, 0, len(chunk)+len("data: \n\n"))
+			if !bytes.HasPrefix(trimmed, []byte("event:")) && !bytes.HasPrefix(trimmed, []byte("data:")) {
+				frame = append(frame, "data: "...)
 			}
+			frame = append(frame, chunk...)
 			if !bytes.HasSuffix(chunk, []byte("\n\n")) {
-				_, _ = c.Writer.Write([]byte("\n\n"))
+				frame = append(frame, '\n', '\n')
 			}
+			_, errWrite := c.Writer.Write(frame)
+			return errWrite
 		},
-		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) {
+		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) error {
 			if errMsg == nil {
-				return
+				return nil
 			}
 			status := http.StatusInternalServerError
 			if errMsg.StatusCode > 0 {
@@ -196,7 +212,8 @@ func (h *GeminiAPIHandler) forwardInteractionsStream(c *gin.Context, flusher htt
 				errText = errMsg.Error.Error()
 			}
 			body := handlers.BuildErrorResponseBody(status, errText)
-			_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", string(body))
+			_, errWrite := fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", string(body))
+			return errWrite
 		},
 	})
 }

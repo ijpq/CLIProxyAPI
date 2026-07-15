@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -142,7 +143,12 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 				result.RetryAfter = retryAfterFromError(chunk.Err)
 				result.CredentialScope = isCredentialScopedError(chunk.Err)
 				applyRequestScopedActionToResult(action, okAction, &result)
-				m.recordExecutionResult(ctx, result, auth, ephemeralResult)
+				clientCanceled := errors.Is(chunk.Err, context.Canceled) || errors.Is(chunk.Err, context.DeadlineExceeded)
+				if clientCanceled {
+					m.reportHomeResult(ctx, result, auth)
+				} else {
+					m.recordExecutionResult(ctx, result, auth, ephemeralResult)
+				}
 			}
 			if !forward {
 				return false

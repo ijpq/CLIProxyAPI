@@ -185,6 +185,12 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			}
 			closeCodexWebsocketSession(sess, reason)
 		}()
+	} else {
+		defer func() {
+			if ctx.Err() != nil {
+				e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, "context_done", ctx.Err())
+			}
+		}()
 	}
 
 	var readCh chan codexWebsocketRead

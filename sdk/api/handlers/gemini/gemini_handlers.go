@@ -246,11 +246,23 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 
 			// Write first chunk
 			if alt == "" {
-				_, _ = c.Writer.Write([]byte("data: "))
-				_, _ = c.Writer.Write(chunk)
-				_, _ = c.Writer.Write([]byte("\n\n"))
+				if _, errWrite := c.Writer.Write([]byte("data: ")); errWrite != nil {
+					cliCancel(errWrite)
+					return
+				}
+				if _, errWrite := c.Writer.Write(chunk); errWrite != nil {
+					cliCancel(errWrite)
+					return
+				}
+				if _, errWrite := c.Writer.Write([]byte("\n\n")); errWrite != nil {
+					cliCancel(errWrite)
+					return
+				}
 			} else {
-				_, _ = c.Writer.Write(chunk)
+				if _, errWrite := c.Writer.Write(chunk); errWrite != nil {
+					cliCancel(errWrite)
+					return
+				}
 			}
 			flusher.Flush()
 
@@ -318,18 +330,24 @@ func (h *GeminiAPIHandler) forwardGeminiStream(c *gin.Context, flusher http.Flus
 
 	h.ForwardStream(c, flusher, cancel, data, errs, handlers.StreamForwardOptions{
 		KeepAliveInterval: keepAliveInterval,
-		WriteChunk: func(chunk []byte) {
+		WriteChunk: func(chunk []byte) error {
 			if alt == "" {
-				_, _ = c.Writer.Write([]byte("data: "))
-				_, _ = c.Writer.Write(chunk)
-				_, _ = c.Writer.Write([]byte("\n\n"))
+				if _, errWrite := c.Writer.Write([]byte("data: ")); errWrite != nil {
+					return errWrite
+				}
+				if _, errWrite := c.Writer.Write(chunk); errWrite != nil {
+					return errWrite
+				}
+				_, errWrite := c.Writer.Write([]byte("\n\n"))
+				return errWrite
 			} else {
-				_, _ = c.Writer.Write(chunk)
+				_, errWrite := c.Writer.Write(chunk)
+				return errWrite
 			}
 		},
-		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) {
+		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) error {
 			if errMsg == nil {
-				return
+				return nil
 			}
 			status := http.StatusInternalServerError
 			if errMsg.StatusCode > 0 {
@@ -341,9 +359,11 @@ func (h *GeminiAPIHandler) forwardGeminiStream(c *gin.Context, flusher http.Flus
 			}
 			body := handlers.BuildErrorResponseBody(status, errText)
 			if alt == "" {
-				_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", string(body))
+				_, errWrite := fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", string(body))
+				return errWrite
 			} else {
-				_, _ = c.Writer.Write(body)
+				_, errWrite := c.Writer.Write(body)
+				return errWrite
 			}
 		},
 	})
