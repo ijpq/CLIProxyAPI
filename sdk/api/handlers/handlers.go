@@ -62,6 +62,21 @@ const (
 	maxStreamInterceptorHistoryBytes  = 1 << 20
 )
 
+// requestValueContext keeps the caller-selected parent for deadlines and
+// cancellation while making values installed by HTTP middleware available to
+// the execution path. Parent values take precedence over request values.
+type requestValueContext struct {
+	context.Context
+	request context.Context
+}
+
+func (c requestValueContext) Value(key any) any {
+	if value := c.Context.Value(key); value != nil {
+		return value
+	}
+	return c.request.Value(key)
+}
+
 // BuildErrorResponseBody builds an OpenAI-compatible JSON error response body.
 // If errText is already valid JSON, it is compacted to ensure single-line SSE compatibility
 // while preserving upstream error payloads.
@@ -504,6 +519,10 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 			parentCtx = logging.WithRequestID(parentCtx, requestID)
 		}
 	}
+	watchRequestCancellation := requestCtx != nil && requestCtx != parentCtx
+	if watchRequestCancellation {
+		parentCtx = requestValueContext{Context: parentCtx, request: requestCtx}
+	}
 	newCtx, cancel := context.WithCancel(parentCtx)
 
 	endpoint := ""
@@ -539,7 +558,7 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 	newCtx = logging.WithResponseHeadersHolder(newCtx)
 
 	cancelCtx := newCtx
-	if requestCtx != nil && requestCtx != parentCtx {
+	if watchRequestCancellation {
 		go func() {
 			select {
 			case <-requestCtx.Done():
