@@ -127,6 +127,12 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
 .auth-alt{margin-top:1rem;text-align:center;font-size:.85rem}
 .auth-alt button{background:none;border:none;color:var(--accent-2);cursor:pointer;font-weight:600;font-size:.85rem}
 
+/* ---------- Usage filter bar ---------- */
+.filter-bar{display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-end}
+.fbox{display:flex;flex-direction:column;gap:.3rem;min-width:150px}
+.fbox label{font-size:.72rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--faint)}
+.fbox select{padding:.5rem .6rem;font-size:.85rem}
+
 /* ---------- Account quota meters ---------- */
 .qgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
 .qacct{border:1px solid var(--border-2);border-radius:var(--radius);background:var(--bg-2);padding:1rem 1.1rem}
@@ -312,6 +318,16 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
     <section id="sec-usage" class="hidden">
       <div class="page-head"><h2>用量明细</h2><p>每条请求的 token、费用与实际服务它的上游账号</p></div>
       <div class="stats" id="usage-charts"></div>
+      <div class="card filter-bar">
+        <div class="fbox"><label>模型</label>
+          <select id="uf-model" onchange="applyUsageFilters()"><option value="">全部模型</option></select></div>
+        <div class="fbox"><label>账号</label>
+          <select id="uf-account" onchange="applyUsageFilters()"><option value="">全部账号</option></select></div>
+        <div class="fbox" id="uf-user-box" style="display:none"><label>用户</label>
+          <select id="uf-user" onchange="applyUsageFilters()"><option value="">全部用户</option></select></div>
+        <button class="btn btn-sm" type="button" onclick="resetUsageFilters()">重置筛选</button>
+        <span class="muted" id="uf-count" style="font-size:.8rem;margin-left:auto"></span>
+      </div>
       <div class="card">
         <div class="table-wrap"><table><thead><tr id="usage-thead"><th>时间</th><th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th></tr></thead>
         <tbody id="usage-list"></tbody></table></div>
@@ -547,7 +563,7 @@ function navigate(page) {
   if (page === 'dashboard') loadDashboard();
   else if (page === 'keys') loadKeys();
   else if (page === 'topup') loadTopup();
-  else if (page === 'usage') { usageCursor = ''; loadUsage(true); loadUsageStats(); }
+  else if (page === 'usage') { usageCursor = ''; loadUsageFilterOptions(); loadUsage(true); loadUsageStats(); }
   else if (page === 'quota') loadQuota();
   else if (page === 'admin') loadAdmin();
 }
@@ -796,12 +812,61 @@ async function viewOrder(id) { try { showOrderDetail(await api('/topup/' + id));
 
 // ---- Usage ----
 let usageShowUser = false;
+let usageFilters = {model:'', auth_id:'', user_id:''};
+let usageLoadedCount = 0;
+
+// Populate the filter dropdowns with the distinct values present in the caller's
+// visible usage. Shows the 用户 filter only for admins (scope=all).
+async function loadUsageFilterOptions() {
+  try {
+    const o = await api('/usage/filters');
+    const modelSel = document.getElementById('uf-model');
+    const acctSel = document.getElementById('uf-account');
+    modelSel.innerHTML = '<option value="">全部模型</option>' +
+      (o.models || []).map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+    acctSel.innerHTML = '<option value="">全部账号</option>' +
+      (o.accounts || []).map(a => `<option value="${esc(a.id)}">${esc(a.label)}</option>`).join('');
+    const userBox = document.getElementById('uf-user-box');
+    if (o.scope === 'all') {
+      userBox.style.display = '';
+      document.getElementById('uf-user').innerHTML = '<option value="">全部用户</option>' +
+        (o.users || []).map(u => `<option value="${esc(u.id)}">${esc(u.email || u.id)}</option>`).join('');
+    } else {
+      userBox.style.display = 'none';
+    }
+    // Restore any active selections after repopulating.
+    modelSel.value = usageFilters.model;
+    acctSel.value = usageFilters.auth_id;
+    const us = document.getElementById('uf-user');
+    if (us) us.value = usageFilters.user_id;
+  } catch(err) { if (err.status === 401) doLogout(); }
+}
+
+function applyUsageFilters() {
+  usageFilters.model = document.getElementById('uf-model').value;
+  usageFilters.auth_id = document.getElementById('uf-account').value;
+  const us = document.getElementById('uf-user');
+  usageFilters.user_id = us ? us.value : '';
+  loadUsage(true);
+}
+
+function resetUsageFilters() {
+  usageFilters = {model:'', auth_id:'', user_id:''};
+  document.getElementById('uf-model').value = '';
+  document.getElementById('uf-account').value = '';
+  const us = document.getElementById('uf-user'); if (us) us.value = '';
+  loadUsage(true);
+}
+
 async function loadUsage(reset) {
   const tbody = document.getElementById('usage-list');
-  if (reset) { usageCursor = ''; tbody.innerHTML = ''; }
+  if (reset) { usageCursor = ''; usageLoadedCount = 0; tbody.innerHTML = ''; }
   try {
     let url = '/usage?limit=50';
     if (usageCursor) url += '&before=' + encodeURIComponent(usageCursor);
+    if (usageFilters.model) url += '&model=' + encodeURIComponent(usageFilters.model);
+    if (usageFilters.auth_id) url += '&auth_id=' + encodeURIComponent(usageFilters.auth_id);
+    if (usageFilters.user_id) url += '&user_id=' + encodeURIComponent(usageFilters.user_id);
     const r = await api(url);
     const records = (r && r.records) || [];
     usageShowUser = !!(r && r.scope === 'all');
@@ -810,8 +875,10 @@ async function loadUsage(reset) {
       document.getElementById('usage-thead').innerHTML =
         `<th>时间</th>${usageShowUser ? '<th>用户</th>' : ''}<th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th>`;
     }
+    const countEl = document.getElementById('uf-count');
     if (!records.length) {
       if (reset) tbody.innerHTML = `<tr><td colspan="${cols}" class="empty">暂无记录</td></tr>`;
+      if (countEl && reset) countEl.textContent = '共 0 条';
       document.getElementById('usage-more').classList.add('hidden'); return;
     }
     document.getElementById('usage-more').classList.remove('hidden');
@@ -821,6 +888,8 @@ async function loadUsage(reset) {
       <td>${u.input_tokens}</td><td>${u.output_tokens}</td><td>${u.cache_read_tokens}</td><td>${u.cache_write_tokens}</td>
       <td>${parseFloat(u.cost).toFixed(4)}</td><td>${statusBadge(u.status)}</td></tr>`).join('');
     usageCursor = records[records.length - 1].created_at;
+    usageLoadedCount += records.length;
+    if (countEl) countEl.textContent = `已显示 ${usageLoadedCount} 条${records.length < 50 ? '' : '+'}`;
     if (records.length < 50) document.getElementById('usage-more').classList.add('hidden');
   } catch(err) {
     if (err.status === 401) { doLogout(); return; }

@@ -165,22 +165,25 @@ func (m *Module) handleUsage(c *gin.Context) {
 		}
 	}
 
+	// Optional filters: by model, by upstream account, and (admin only) by the
+	// owning portal user.
+	filter := store.UsageFilter{
+		Model:  strings.TrimSpace(c.Query("model")),
+		AuthID: strings.TrimSpace(c.Query("auth_id")),
+	}
+
 	// The super admin sees usage across all users (with each row's owner);
 	// everyone else sees only their own. Trust the JWT admin claim on the fast
 	// path, but fall back to the DB so a token issued before the account was
 	// promoted (BILLING_ADMIN_EMAIL) still gets the admin-wide view.
-	admin := isAdminFromGin(c)
-	if !admin {
-		if u, errUser := m.store.GetUserByID(c.Request.Context(), userID); errUser == nil && u.IsAdmin {
-			admin = true
-		}
-	}
+	admin := m.isAdmin(c)
 	var records []store.UsageRecord
 	var err error
 	if admin {
-		records, err = m.store.ListAllUsage(c.Request.Context(), before, limit)
+		filter.UserID = strings.TrimSpace(c.Query("user_id"))
+		records, err = m.store.ListAllUsage(c.Request.Context(), before, limit, filter)
 	} else {
-		records, err = m.store.ListUsage(c.Request.Context(), userID, before, limit)
+		records, err = m.store.ListUsage(c.Request.Context(), userID, before, limit, filter)
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "usage lookup failed"})
@@ -191,6 +194,54 @@ func (m *Module) handleUsage(c *gin.Context) {
 		out = append(out, usageView(r))
 	}
 	c.JSON(http.StatusOK, gin.H{"records": out, "scope": map[bool]string{true: "all", false: "self"}[admin]})
+}
+
+// isAdmin reports whether the caller is the super admin, trusting the JWT claim
+// on the fast path and falling back to the DB flag (covers a token issued before
+// the account was promoted via BILLING_ADMIN_EMAIL).
+func (m *Module) isAdmin(c *gin.Context) bool {
+	if isAdminFromGin(c) {
+		return true
+	}
+	if u, err := m.store.GetUserByID(c.Request.Context(), userIDFromGin(c)); err == nil && u.IsAdmin {
+		return true
+	}
+	return false
+}
+
+// handleUsageFilters returns the distinct filter values present in the caller's
+// visible usage (models, upstream accounts, and — for admins — portal users), so
+// the UI can populate its filter dropdowns with only meaningful choices.
+func (m *Module) handleUsageFilters(c *gin.Context) {
+	userID := userIDFromGin(c)
+	admin := m.isAdmin(c)
+	scopeUser := userID
+	if admin {
+		scopeUser = "" // all users
+	}
+	models, authIDs, users, err := m.store.UsageFilterOptions(c.Request.Context(), scopeUser)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "filter options failed"})
+		return
+	}
+	aliases, _ := m.store.AccountAliases(c.Request.Context())
+	accounts := make([]gin.H, 0, len(authIDs))
+	for _, id := range authIDs {
+		accounts = append(accounts, gin.H{"id": id, "label": billing.SafeAccountLabel(id, aliases)})
+	}
+	resp := gin.H{
+		"scope":    map[bool]string{true: "all", false: "self"}[admin],
+		"models":   models,
+		"accounts": accounts,
+	}
+	if admin {
+		us := make([]gin.H, 0, len(users))
+		for _, u := range users {
+			us = append(us, gin.H{"id": u.ID, "email": u.Email})
+		}
+		resp["users"] = us
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (m *Module) handleListKeys(c *gin.Context) {
