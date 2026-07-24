@@ -29,8 +29,9 @@ type Store interface {
 	ListAPIKeys(ctx context.Context, userID string) ([]store.APIKeyRecord, error)
 	RevokeAPIKey(ctx context.Context, userID, keyID string) error
 	GetWalletBalance(ctx context.Context, userID string) (string, error)
-	ListUsage(ctx context.Context, userID string, before time.Time, limit int) ([]store.UsageRecord, error)
-	ListAllUsage(ctx context.Context, before time.Time, limit int) ([]store.UsageRecord, error)
+	ListUsage(ctx context.Context, userID string, before time.Time, limit int, filter store.UsageFilter) ([]store.UsageRecord, error)
+	ListAllUsage(ctx context.Context, before time.Time, limit int, filter store.UsageFilter) ([]store.UsageRecord, error)
+	UsageFilterOptions(ctx context.Context, userID string) (models []string, authIDs []string, users []store.UserRef, err error)
 
 	UpdateUserPassword(ctx context.Context, userID, newPasswordHash string) error
 
@@ -129,6 +130,7 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.POST("/change-password", m.handleChangePassword)
 	authed.GET("/wallet", m.handleWallet)
 	authed.GET("/usage", m.handleUsage)
+	authed.GET("/usage/filters", m.handleUsageFilters)
 	authed.GET("/usage/stats", m.handleUsageStats)
 	authed.GET("/api-keys", m.handleListKeys)
 	authed.POST("/api-keys", m.handleCreateKey)
