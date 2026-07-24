@@ -285,18 +285,43 @@ func (s *PostgresStore) GetWalletBalance(ctx context.Context, userID string) (st
 // ListUsage returns up to limit usage records for the user, newest first.
 // before is an exclusive upper bound on created_at for keyset pagination; pass
 // the zero time to start from the most recent row.
-func (s *PostgresStore) ListUsage(ctx context.Context, userID string, before time.Time, limit int) ([]UsageRecord, error) {
+// UsageFilter narrows a usage listing. Empty fields are ignored. UserID applies
+// only to admin-wide listings (ListAllUsage); ListUsage is already scoped to one
+// user.
+type UsageFilter struct {
+	Model  string
+	AuthID string
+	UserID string
+}
+
+// UserRef is a minimal user identity used to populate filter pickers.
+type UserRef struct {
+	ID    string
+	Email string
+}
+
+func (s *PostgresStore) ListUsage(ctx context.Context, userID string, before time.Time, limit int, filter UsageFilter) ([]UsageRecord, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("postgres store: not initialized")
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	args := []any{userID}
-	whereTime := ""
+	var args []any
+	var conds []string
+	add := func(clause string, val any) {
+		args = append(args, val)
+		conds = append(conds, fmt.Sprintf(clause, len(args)))
+	}
+	add("user_id = $%d", userID)
 	if !before.IsZero() {
-		whereTime = " AND created_at < $2"
-		args = append(args, before)
+		add("created_at < $%d", before)
+	}
+	if m := strings.TrimSpace(filter.Model); m != "" {
+		add("model = $%d", m)
+	}
+	if a := strings.TrimSpace(filter.AuthID); a != "" {
+		add("auth_id = $%d", a)
 	}
 	args = append(args, limit)
 	limitIdx := len(args)
@@ -306,10 +331,10 @@ func (s *PostgresStore) ListUsage(ctx context.Context, userID string, before tim
 		       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
 		       cost::text, status, error_message, auth_id, auth_label, created_at
 		FROM %s
-		WHERE user_id = $1%s
+		WHERE %s
 		ORDER BY created_at DESC
 		LIMIT $%d
-	`, s.fullTableName(BillingUsageRecordsTable), whereTime, limitIdx)
+	`, s.fullTableName(BillingUsageRecordsTable), strings.Join(conds, " AND "), limitIdx)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -336,21 +361,37 @@ func (s *PostgresStore) ListUsage(ctx context.Context, userID string, before tim
 
 // ListAllUsage returns usage across all users (admin view), each row annotated
 // with the owning user's email. Ordering and pagination match ListUsage.
-func (s *PostgresStore) ListAllUsage(ctx context.Context, before time.Time, limit int) ([]UsageRecord, error) {
+func (s *PostgresStore) ListAllUsage(ctx context.Context, before time.Time, limit int, filter UsageFilter) ([]UsageRecord, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("postgres store: not initialized")
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	args := []any{}
-	whereTime := ""
+	var args []any
+	var conds []string
+	add := func(clause string, val any) {
+		args = append(args, val)
+		conds = append(conds, fmt.Sprintf(clause, len(args)))
+	}
 	if !before.IsZero() {
-		whereTime = " WHERE ur.created_at < $1"
-		args = append(args, before)
+		add("ur.created_at < $%d", before)
+	}
+	if m := strings.TrimSpace(filter.Model); m != "" {
+		add("ur.model = $%d", m)
+	}
+	if a := strings.TrimSpace(filter.AuthID); a != "" {
+		add("ur.auth_id = $%d", a)
+	}
+	if u := strings.TrimSpace(filter.UserID); u != "" {
+		add("ur.user_id = $%d", u)
 	}
 	args = append(args, limit)
 	limitIdx := len(args)
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
+	}
 
 	query := fmt.Sprintf(`
 		SELECT ur.id, ur.api_key_id, ur.request_id, ur.provider, ur.model,
@@ -361,7 +402,7 @@ func (s *PostgresStore) ListAllUsage(ctx context.Context, before time.Time, limi
 		LEFT JOIN %s u ON u.id = ur.user_id%s
 		ORDER BY ur.created_at DESC
 		LIMIT $%d
-	`, s.fullTableName(BillingUsageRecordsTable), s.fullTableName(BillingUsersTable), whereTime, limitIdx)
+	`, s.fullTableName(BillingUsageRecordsTable), s.fullTableName(BillingUsersTable), where, limitIdx)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -385,6 +426,73 @@ func (s *PostgresStore) ListAllUsage(ctx context.Context, before time.Time, limi
 		return nil, fmt.Errorf("postgres store: iterate all usage: %w", err)
 	}
 	return out, nil
+}
+
+// UsageFilterOptions returns the distinct filter values that actually appear in
+// usage rows, so the UI only offers meaningful choices. When userID is non-empty
+// the scope is that user's own rows; empty userID = all users (admin) and also
+// returns the distinct owning users.
+func (s *PostgresStore) UsageFilterOptions(ctx context.Context, userID string) (models []string, authIDs []string, users []UserRef, err error) {
+	if s == nil || s.db == nil {
+		return nil, nil, nil, fmt.Errorf("postgres store: not initialized")
+	}
+	usage := s.fullTableName(BillingUsageRecordsTable)
+	usersTbl := s.fullTableName(BillingUsersTable)
+
+	scope := ""
+	var scopeArgs []any
+	if uid := strings.TrimSpace(userID); uid != "" {
+		scope = " AND user_id = $1"
+		scopeArgs = []any{uid}
+	}
+
+	distinct := func(col string) ([]string, error) {
+		q := fmt.Sprintf("SELECT DISTINCT %s FROM %s WHERE %s <> ''%s ORDER BY %s", col, usage, col, scope, col)
+		rows, errQ := s.db.QueryContext(ctx, q, scopeArgs...)
+		if errQ != nil {
+			return nil, errQ
+		}
+		defer func() { _ = rows.Close() }()
+		var vals []string
+		for rows.Next() {
+			var v string
+			if errS := rows.Scan(&v); errS != nil {
+				return nil, errS
+			}
+			vals = append(vals, v)
+		}
+		return vals, rows.Err()
+	}
+
+	if models, err = distinct("model"); err != nil {
+		return nil, nil, nil, fmt.Errorf("postgres store: usage models: %w", err)
+	}
+	if authIDs, err = distinct("auth_id"); err != nil {
+		return nil, nil, nil, fmt.Errorf("postgres store: usage accounts: %w", err)
+	}
+
+	// The owning-user picker only makes sense in the admin-wide scope.
+	if strings.TrimSpace(userID) == "" {
+		q := fmt.Sprintf(`SELECT DISTINCT ur.user_id, COALESCE(u.email, '')
+			FROM %s ur LEFT JOIN %s u ON u.id = ur.user_id
+			WHERE ur.user_id IS NOT NULL ORDER BY 2`, usage, usersTbl)
+		rows, errQ := s.db.QueryContext(ctx, q)
+		if errQ != nil {
+			return nil, nil, nil, fmt.Errorf("postgres store: usage users: %w", errQ)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var ref UserRef
+			if errS := rows.Scan(&ref.ID, &ref.Email); errS != nil {
+				return nil, nil, nil, fmt.Errorf("postgres store: scan usage user: %w", errS)
+			}
+			users = append(users, ref)
+		}
+		if errR := rows.Err(); errR != nil {
+			return nil, nil, nil, fmt.Errorf("postgres store: iterate usage users: %w", errR)
+		}
+	}
+	return models, authIDs, users, nil
 }
 
 // UpdateUserPassword replaces the password hash for the given user id.
