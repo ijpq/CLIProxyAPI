@@ -425,7 +425,11 @@ func TestUserFieldDeletion(t *testing.T) {
 	}
 }
 
-func TestContextManagementCompactionCompatibility(t *testing.T) {
+// TestContextManagementCompactionForwarded asserts that Codex Remote Compaction
+// V2's context_management directive is forwarded to the Codex upstream intact.
+// Deleting it makes the upstream run a normal generation, so Codex aborts with
+// "remote compaction v2 expected exactly one compaction output item, got 0".
+func TestContextManagementCompactionForwarded(t *testing.T) {
 	inputJSON := []byte(`{
 		"model": "gpt-5.2",
 		"context_management": [
@@ -434,17 +438,44 @@ func TestContextManagementCompactionCompatibility(t *testing.T) {
 				"compact_threshold": 12000
 			}
 		],
+		"truncation": "disabled",
 		"input": [{"role":"user","content":"hello"}]
 	}`)
 
 	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
 	outputStr := string(output)
 
-	if gjson.Get(outputStr, "context_management").Exists() {
-		t.Fatalf("context_management should be removed for Codex compatibility")
+	cm := gjson.Get(outputStr, "context_management")
+	if !cm.Exists() || !cm.IsArray() || len(cm.Array()) != 1 {
+		t.Fatalf("context_management must be forwarded for Remote Compaction V2, got: %s", cm.Raw)
 	}
+	entry := cm.Array()[0]
+	if entry.Get("type").String() != "compaction" {
+		t.Fatalf("context_management[0].type = %q, want compaction", entry.Get("type").String())
+	}
+	if entry.Get("compact_threshold").Int() != 12000 {
+		t.Fatalf("context_management[0].compact_threshold = %d, want 12000", entry.Get("compact_threshold").Int())
+	}
+	// truncation is still stripped (a separate, genuinely unsupported field).
 	if gjson.Get(outputStr, "truncation").Exists() {
 		t.Fatalf("truncation should be removed for Codex compatibility")
+	}
+	// stream must be forced true so the compaction item arrives via SSE.
+	if gjson.Get(outputStr, "stream").Type != gjson.True {
+		t.Fatalf("stream must be true for Codex Remote Compaction V2")
+	}
+}
+
+// TestNormalRequestHasNoContextManagement guards that ordinary requests (which
+// carry no context_management) are unaffected by the compaction fix.
+func TestNormalRequestHasNoContextManagement(t *testing.T) {
+	inputJSON := []byte(`{"model":"gpt-5.2","input":[{"role":"user","content":"hello"}]}`)
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	if gjson.GetBytes(output, "context_management").Exists() {
+		t.Fatalf("context_management must not be injected into normal requests")
+	}
+	if !gjson.GetBytes(output, "input").IsArray() {
+		t.Fatalf("input array must be preserved for normal requests")
 	}
 }
 
