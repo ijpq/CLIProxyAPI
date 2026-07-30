@@ -65,7 +65,7 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 
 	deleteCodexRequestFieldsDoc(rawJSON, ensureDoc, "truncation", "prompt_cache_options", "prompt_cache_retention")
 	inputResult = stripCodexResponsesCacheBreakpointsDoc(rawJSON, inputResult, ensureDoc)
-	applyResponsesCompactionCompatibilityDoc(rawJSON, ensureDoc)
+	// Preserve context_management for Codex Remote Compaction V2.
 
 	// Delete the user field as it is not supported by the Codex upstream.
 	deleteCodexRequestFieldsDoc(rawJSON, ensureDoc, "user")
@@ -256,21 +256,6 @@ func stripPromptCacheBreakpointFromContent(content ojson.Result) ([]byte, bool) 
 		return nil, false
 	}
 	return translatorcommon.JoinRawArray(rebuiltParts), true
-}
-
-// applyResponsesCompactionCompatibility handles OpenAI Responses context_management.compaction
-// for Codex upstream compatibility.
-//
-// Codex /responses currently rejects context_management with:
-// {"detail":"Unsupported parameter: context_management"}.
-//
-// Compatibility strategy:
-// 1) Remove context_management before forwarding to Codex upstream.
-func applyResponsesCompactionCompatibilityDoc(rawJSON []byte, ensureDoc func() *ojson.Doc) {
-	if !ojson.GetBytesNoCopy(rawJSON, "context_management").Exists() {
-		return
-	}
-	_ = ensureDoc().Delete("context_management")
 }
 
 // convertSystemRoleToDeveloper traverses the input array and converts any message items
