@@ -167,20 +167,32 @@ func stripPromptCacheBreakpointFromContent(content gjson.Result) ([]byte, bool) 
 	return translatorcommon.JoinRawArray(rebuiltParts), true
 }
 
-// applyResponsesCompactionCompatibility handles OpenAI Responses context_management.compaction
-// for Codex upstream compatibility.
+// applyResponsesCompactionCompatibility forwards OpenAI Responses
+// context_management to the Codex upstream unchanged so Remote Compaction V2
+// works end to end.
 //
-// Codex /responses currently rejects context_management with:
-// {"detail":"Unsupported parameter: context_management"}.
+// Codex CLI drives server-side ("remote") compaction v2 by sending
 //
-// Compatibility strategy:
-// 1) Remove context_management before forwarding to Codex upstream.
+//	"context_management": [{"type":"compaction","compact_threshold":<N>}]
+//
+// on the streaming POST /responses request and then reading exactly one
+// type="compaction" output item back from the SSE stream (see
+// collect_compaction_output in codex-rs). The Codex upstream (chatgpt.com
+// backend) performs the compaction and emits that item.
+//
+// This hook used to DELETE context_management, because an older chatgpt.com
+// build rejected it with {"detail":"Unsupported parameter: context_management"}.
+// Stripping it made the upstream run a normal generation instead, so it emitted
+// reasoning + message output items and zero compaction items, and Codex aborted
+// the turn with:
+//
+//	remote compaction v2 expected exactly one compaction output item,
+//	got 0 from 2 output items
+//
+// The current Codex backend supports context_management, so we forward it as-is.
+// Kept as a named hook so this decision stays documented alongside the other
+// Codex request-compatibility transforms and remains covered by tests.
 func applyResponsesCompactionCompatibility(rawJSON []byte) []byte {
-	if !gjson.GetBytes(rawJSON, "context_management").Exists() {
-		return rawJSON
-	}
-
-	rawJSON, _ = sjson.DeleteBytes(rawJSON, "context_management")
 	return rawJSON
 }
 
