@@ -420,7 +420,7 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
     <div class="modal-body">
       <label class="switch-row"><span>免余额（不计费，用量仍记录）</span><input type="checkbox" id="um-unbilled"></label>
       <label class="switch-row"><span>允许重置额度（可消耗 Codex 重置额度）</span><input type="checkbox" id="um-allowreset"></label>
-      <div class="field-label">可用模型（都不选 = 允许全部）</div>
+      <div class="field-label">可用范围（模型与认证文件可组合；同时选择时必须同时满足；都不选 = 允许全部）</div>
       <div class="tabs-sm">
         <button class="tab-sm active" data-tab="models" onclick="umTab('models')">按模型选</button>
         <button class="tab-sm" data-tab="accounts" onclick="umTab('accounts')">按认证文件选</button>
@@ -579,7 +579,9 @@ async function loadQuota() {
     const models = u.allowed_models || [], accts = u.allowed_auth_ids || [];
     document.getElementById('q-models').innerHTML = models.length
       ? models.map(m => `<span class="chip"><span class="dot"></span>${esc(m)}</span>`).join('')
-      : '<span class="chip all">全部模型</span>';
+      : accts.length
+        ? '<span class="chip all">由所选认证文件支持的模型决定</span>'
+        : '<span class="chip all">全部模型</span>';
     document.getElementById('q-accounts').innerHTML = accts.length
       ? accts.map(a => `<span class="chip"><span class="dot"></span>${esc(labels[a] || '账号')}</span>`).join('')
       : '<span class="chip all">全部账号</span>';
@@ -994,8 +996,10 @@ async function saveAlias(btn) {
 }
 function limitSummary(u) {
   const m = (u.allowed_models||[]).length, a = (u.allowed_auth_ids||[]).length;
-  if (m) return `<span class="badge badge-blue">${m} 个模型</span>`;
-  if (a) return `<span class="badge badge-blue">${a} 个账号</span>`;
+  const parts = [];
+  if (m) parts.push(`<span class="badge badge-blue">${m} 个模型</span>`);
+  if (a) parts.push(`<span class="badge badge-violet">${a} 个认证文件</span>`);
+  if (parts.length) return parts.join(' ');
   return '<span class="muted">全部</span>';
 }
 async function adminConfirm(id) {

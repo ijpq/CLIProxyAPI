@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	"github.com/tidwall/gjson"
 )
 
@@ -15,8 +16,9 @@ import (
 // model restriction (empty list) and non-billing requests pass through. The
 // model is read from the JSON body's "model" field (openai/claude/codex/
 // responses dialects), falling back to the URL path for Gemini-style routes.
-// When the model cannot be determined the request is allowed (fail-open) so
-// unusual endpoints are never hard-blocked.
+// When the model cannot be determined this early guard allows the request to
+// continue. The execution layer performs the authoritative check after the
+// request model has been resolved, including WebSocket and plugin routes.
 func ModelAccessGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		allowed := AllowedModelsFromContext(c.Request.Context())
@@ -25,10 +27,12 @@ func ModelAccessGuard() gin.HandlerFunc {
 		}
 		model := requestedModel(c)
 		if model == "" {
-			return // fail-open: could not determine the model
+			return // The execution layer validates the resolved model.
 		}
+		requestedModel := strings.TrimSpace(thinking.ParseSuffix(model).ModelName)
 		for _, m := range allowed {
-			if strings.EqualFold(strings.TrimSpace(m), model) {
+			allowedModel := strings.TrimSpace(thinking.ParseSuffix(m).ModelName)
+			if strings.EqualFold(allowedModel, requestedModel) {
 				return
 			}
 		}
