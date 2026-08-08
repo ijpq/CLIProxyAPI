@@ -1909,7 +1909,8 @@ func (m *Manager) SelectHomeAuthWithCredentialPolicy(ctx context.Context, provid
 		}
 		providerMatches := strings.TrimSpace(provider) == "" || strings.EqualFold(strings.TrimSpace(selection.Provider), strings.TrimSpace(provider))
 		policyMatches := credentialPolicyAllows(policy, selection.Auth)
-		if providerMatches && policyMatches {
+		allowedMatches := authAllowedByMetadata(selection.Auth, opts.Metadata)
+		if providerMatches && policyMatches && allowedMatches {
 			return selection, nil
 		}
 
@@ -1920,6 +1921,8 @@ func (m *Manager) SelectHomeAuthWithCredentialPolicy(ctx context.Context, provid
 		reason := "credential_policy_mismatch"
 		if !providerMatches {
 			reason = "provider_mismatch"
+		} else if !allowedMatches {
+			reason = "auth_not_allowed"
 		}
 		if errEnd := m.endHomeSelectionBeforeRedispatch(selectionCtx, selection, reason); errEnd != nil {
 			return nil, errEnd
@@ -1957,7 +1960,8 @@ func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, mod
 		providerMatches := strings.TrimSpace(provider) == "" || strings.EqualFold(strings.TrimSpace(selection.Provider), strings.TrimSpace(provider))
 		selectionAuth := selection.CloneAuth()
 		kindMatches := selectionAuth != nil && selectionAuth.AuthKind() == requiredKind
-		if providerMatches && kindMatches {
+		allowedMatches := authAllowedByMetadata(selectionAuth, opts.Metadata)
+		if providerMatches && kindMatches && allowedMatches {
 			return selection, nil
 		}
 
@@ -1968,6 +1972,8 @@ func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, mod
 		reason := "auth_kind_mismatch"
 		if !providerMatches {
 			reason = "provider_mismatch"
+		} else if !allowedMatches {
+			reason = "auth_not_allowed"
 		}
 		if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, reason); errEnd != nil {
 			return nil, errEnd
