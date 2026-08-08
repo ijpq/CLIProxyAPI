@@ -39,6 +39,11 @@ const (
 	// credential: the normal scheduler (round-robin / fill-first) still picks
 	// among the allowed candidates. Empty or absent means no restriction.
 	AllowedAuthIDsMetadataKey = "allowed_auth_ids"
+	// AllowedModelsMetadataKey restricts execution to client-visible model names.
+	// The check is performed before provider routing and credential selection so
+	// HTTP, streaming, and WebSocket requests share the same enforcement path.
+	// Empty or absent means no restriction.
+	AllowedModelsMetadataKey = "allowed_models"
 	// SelectedAuthMetadataKey stores the auth ID selected by the scheduler.
 	SelectedAuthMetadataKey = "selected_auth_id"
 	// SelectedAuthCallbackMetadataKey carries an optional callback invoked with the selected auth ID.
