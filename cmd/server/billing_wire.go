@@ -122,14 +122,19 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.Serv
 	// like a pin; an empty set leaves normal scheduling untouched.
 	api.RegisterPostAuthHandler(func(c *gin.Context) {
 		reqCtx := c.Request.Context()
-		allowed := billing.AllowedAuthIDsFromContext(reqCtx)
-		if len(allowed) == 0 {
-			return
+		executionCtx := reqCtx
+		if allowed := billing.AllowedAuthIDsFromContext(reqCtx); len(allowed) > 0 {
+			executionCtx = sdkhandlers.WithAllowedAuthIDs(executionCtx, allowed)
 		}
-		c.Request = c.Request.WithContext(sdkhandlers.WithAllowedAuthIDs(reqCtx, allowed))
+		if allowed := billing.AllowedModelsFromContext(reqCtx); len(allowed) > 0 {
+			executionCtx = sdkhandlers.WithAllowedModels(executionCtx, allowed)
+		}
+		if executionCtx != reqCtx {
+			c.Request = c.Request.WithContext(executionCtx)
+		}
 	})
-	// Per-user model restriction (set by the super admin): 403 a request whose
-	// target model is not on the user's allowed list.
+	// Reject obvious HTTP model violations early. The execution layer performs
+	// the authoritative check once the effective model is known.
 	api.RegisterPostAuthHandler(billing.ModelAccessGuard())
 	go sweepRateLimiter(rateLimiter)
 
