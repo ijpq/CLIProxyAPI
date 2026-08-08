@@ -471,6 +471,7 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 	providerKey := canonicalSchedulingProvider(provider)
 	modelKey := canonicalModelLookupKey(model)
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
+	allowedAuthIDs := allowedAuthIDsFromMetadata(opts.Metadata)
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
 	preferWebsocket := cliproxyexecutor.DownstreamWebsocket(ctx) && providerPrefersWebsocketTransport(providerKey) && pinnedAuthID == ""
 
@@ -487,7 +488,7 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 	if shard == nil {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin)
+	predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, allowedAuthIDs, strategy == schedulerStrategyWeightedRoundRobin)
 	if strategy == schedulerStrategyWeightedRoundRobin {
 		if ctx != nil && ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -498,7 +499,7 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 			return nil, shard.unavailableErrorLocked(provider, model, predicate)
 		}
 		// A pin controls selection, not the peers against which traffic is charged.
-		accountingPredicate := scheduledAuthPredicate(eligibility, tried, "", true)
+		accountingPredicate := scheduledAuthPredicate(eligibility, tried, "", allowedAuthIDs, true)
 		bucket := shard.readyByPriority[priority]
 		entries := bucket.all.flat
 		nonWebsocketOnly := false
@@ -565,6 +566,7 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 		return picked, providerKey, nil
 	}
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
+	allowedAuthIDs := allowedAuthIDsFromMetadata(opts.Metadata)
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
 	modelKey := canonicalModelLookupKey(model)
 
@@ -583,14 +585,14 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 			return nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
 		shard := providerState.ensureModelLocked(modelKey, time.Now())
-		predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin)
+		predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, allowedAuthIDs, strategy == schedulerStrategyWeightedRoundRobin)
 		if picked := shard.pickReadyLocked(false, strategy, predicate); picked != nil {
 			return picked, providerKey, nil
 		}
 		return nil, "", shard.unavailableErrorLocked("mixed", model, predicate)
 	}
 
-	predicate := scheduledAuthPredicate(eligibility, tried, "", strategy == schedulerStrategyWeightedRoundRobin)
+	predicate := scheduledAuthPredicate(eligibility, tried, "", allowedAuthIDs, strategy == schedulerStrategyWeightedRoundRobin)
 	candidateShards := make([]*modelScheduler, len(normalized))
 	bestPriority := 0
 	hasCandidate := false
@@ -838,7 +840,7 @@ func (s *authScheduler) mixedUnavailableErrorLocked(providers []string, model st
 }
 
 // scheduledAuthPredicate filters request-ineligible auths before scheduler state advances.
-func scheduledAuthPredicate(eligibility authSelectionEligibility, tried map[string]struct{}, pinnedAuthID string, requirePositiveWeight bool) func(*scheduledAuth) bool {
+func scheduledAuthPredicate(eligibility authSelectionEligibility, tried map[string]struct{}, pinnedAuthID string, allowedAuthIDs map[string]struct{}, requirePositiveWeight bool) func(*scheduledAuth) bool {
 	return func(entry *scheduledAuth) bool {
 		if entry == nil || entry.auth == nil || !eligibility.allows(entry.auth) {
 			return false
@@ -848,6 +850,11 @@ func scheduledAuthPredicate(eligibility authSelectionEligibility, tried map[stri
 		}
 		if pinnedAuthID != "" && entry.auth.ID != pinnedAuthID {
 			return false
+		}
+		if allowedAuthIDs != nil {
+			if _, ok := allowedAuthIDs[entry.auth.ID]; !ok {
+				return false
+			}
 		}
 		if len(tried) > 0 {
 			if _, ok := tried[entry.auth.ID]; ok {

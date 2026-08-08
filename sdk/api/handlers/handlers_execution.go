@@ -35,6 +35,26 @@ type pluginExecutorAttributionHost interface {
 	ExecutePluginExecutorStreamWithAttribution(context.Context, string, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, *pluginapi.UsageAttribution, error)
 }
 
+func modelAccessError(ctx context.Context, modelName string) *interfaces.ErrorMessage {
+	if modelAllowedFromContext(ctx, modelName) {
+		return nil
+	}
+	return &interfaces.ErrorMessage{
+		StatusCode: http.StatusForbidden,
+		Error:      errors.New("model not allowed for this account"),
+	}
+}
+
+func pluginExecutorAccessError(ctx context.Context) *interfaces.ErrorMessage {
+	if len(allowedAuthIDsFromContext(ctx)) == 0 {
+		return nil
+	}
+	return &interfaces.ErrorMessage{
+		StatusCode: http.StatusForbidden,
+		Error:      errors.New("plugin executor cannot satisfy the upstream account restriction"),
+	}
+}
+
 // ExecuteWithAuthManager executes a non-streaming request via the core auth manager.
 // This path is the only supported execution route.
 func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string) ([]byte, http.Header, *interfaces.ErrorMessage) {
@@ -51,6 +71,9 @@ func (h *BaseAPIHandler) executeWithAuthManager(ctx context.Context, handlerType
 }
 
 func (h *BaseAPIHandler) executeWithAuthManagerFormats(ctx context.Context, entryProtocol, exitProtocol, modelName string, rawJSON []byte, alt string, allowImageModel bool, execOptions modelExecutionOptions) ([]byte, http.Header, *interfaces.ErrorMessage) {
+	if errAccess := modelAccessError(ctx, modelName); errAccess != nil {
+		return nil, nil, errAccess
+	}
 	originalRequestedModel := modelName
 	// Speech-only models are reachable solely through the speech entry protocol.
 	execOptions.AllowSpeechModel = isModelExecutionSpeechProtocol(entryProtocol)
@@ -60,6 +83,9 @@ func (h *BaseAPIHandler) executeWithAuthManagerFormats(ctx context.Context, entr
 		return nil, nil, errMsg
 	}
 	if routeDecision.ExecutorPluginID != "" {
+		if errAccess := pluginExecutorAccessError(ctx); errAccess != nil {
+			return nil, nil, errAccess
+		}
 		return h.executeWithPluginExecutor(ctx, entryProtocol, responseProtocol, modelName, originalRequestedModel, rawJSON, alt, routeDecision.ExecutorPluginID, execOptions)
 	}
 	providers, normalizedModel, errMsg := h.providersForExecution(modelName, originalRequestedModel, allowImageModel, routeDecision, execOptions)
@@ -137,9 +163,15 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 }
 
 func (h *BaseAPIHandler) executeCountWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string, execOptions modelExecutionOptions) ([]byte, http.Header, *interfaces.ErrorMessage) {
+	if errAccess := modelAccessError(ctx, modelName); errAccess != nil {
+		return nil, nil, errAccess
+	}
 	originalRequestedModel := modelName
 	routeDecision := h.applyModelRouter(ctx, handlerType, modelName, rawJSON, false, execOptions)
 	if routeDecision.ExecutorPluginID != "" {
+		if errAccess := pluginExecutorAccessError(ctx); errAccess != nil {
+			return nil, nil, errAccess
+		}
 		return h.countWithPluginExecutor(ctx, handlerType, modelName, originalRequestedModel, rawJSON, alt, routeDecision.ExecutorPluginID, execOptions)
 	}
 	providers, normalizedModel, errMsg := h.providersForExecution(modelName, originalRequestedModel, false, routeDecision, execOptions)
