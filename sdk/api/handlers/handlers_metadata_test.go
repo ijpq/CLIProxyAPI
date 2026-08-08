@@ -40,6 +40,8 @@ func TestGetContextWithCancelCapturesClientRequestMetadata(t *testing.T) {
 
 func TestRequestExecutionMetadataIncludesExecutionSessionWithoutIdempotencyKey(t *testing.T) {
 	ctx := WithExecutionSessionID(context.Background(), "session-1")
+	ctx = WithAllowedAuthIDs(ctx, []string{"auth-a", "auth-b"})
+	ctx = WithAllowedModels(ctx, []string{"model-a", "model-b"})
 
 	meta := requestExecutionMetadata(ctx)
 	if got := meta[coreexecutor.ExecutionSessionMetadataKey]; got != "session-1" {
@@ -47,6 +49,12 @@ func TestRequestExecutionMetadataIncludesExecutionSessionWithoutIdempotencyKey(t
 	}
 	if _, ok := meta[idempotencyKeyMetadataKey]; ok {
 		t.Fatalf("unexpected idempotency key in metadata: %v", meta[idempotencyKeyMetadataKey])
+	}
+	if got, ok := meta[coreexecutor.AllowedAuthIDsMetadataKey].([]string); !ok || len(got) != 2 || got[0] != "auth-a" || got[1] != "auth-b" {
+		t.Fatalf("AllowedAuthIDsMetadataKey = %#v, want [auth-a auth-b]", meta[coreexecutor.AllowedAuthIDsMetadataKey])
+	}
+	if got, ok := meta[coreexecutor.AllowedModelsMetadataKey].([]string); !ok || len(got) != 2 || got[0] != "model-a" || got[1] != "model-b" {
+		t.Fatalf("AllowedModelsMetadataKey = %#v, want [model-a model-b]", meta[coreexecutor.AllowedModelsMetadataKey])
 	}
 }
 

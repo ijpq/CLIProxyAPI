@@ -82,6 +82,14 @@ func (m *Module) handleAdminSetUserLimits(c *gin.Context) {
 	}
 	models := billing.ValidModels(req.AllowedModels)
 	auths := billing.ValidAccountIDs(req.AllowedAuthIDs)
+	if rejected := rejectedSelections(req.AllowedModels, models); len(rejected) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown models", "models": rejected})
+		return
+	}
+	if rejected := rejectedSelections(req.AllowedAuthIDs, auths); len(rejected) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown upstream accounts", "auth_ids": rejected})
+		return
+	}
 	if err := m.store.SetUserLimits(c.Request.Context(), userID, req.Unbilled, models, auths, req.AllowReset); err != nil {
 		if errors.Is(err, store.ErrUserNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
@@ -98,6 +106,34 @@ func (m *Module) handleAdminSetUserLimits(c *gin.Context) {
 		"allowed_auth_ids": auths,
 		"allow_reset":      req.AllowReset,
 	})
+}
+
+func rejectedSelections(requested, accepted []string) []string {
+	acceptedSet := make(map[string]struct{}, len(accepted))
+	for _, value := range accepted {
+		if value = strings.TrimSpace(value); value != "" {
+			acceptedSet[value] = struct{}{}
+		}
+	}
+	rejected := make([]string, 0)
+	seen := make(map[string]struct{}, len(requested))
+	for _, value := range requested {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		if _, ok := acceptedSet[value]; !ok {
+			rejected = append(rejected, value)
+		}
+	}
+	if len(rejected) == 0 {
+		return nil
+	}
+	return rejected
 }
 
 // handleAdminListModels returns every client-visible model name for the admin's

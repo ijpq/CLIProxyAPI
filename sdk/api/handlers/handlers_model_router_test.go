@@ -281,6 +281,49 @@ func TestHandlerModelRouterPluginExecutorFailsClosedWhenHomeEnabled(t *testing.T
 	}
 }
 
+func TestHandlerModelAccessRejectsPluginExecutorRoutes(t *testing.T) {
+	host := &handlerDirectExecutorRouteHost{}
+	host.hasRouters = true
+	host.route = func(context.Context, pluginapi.ModelRouteRequest) (pluginapi.ModelRouteResponse, bool) {
+		return pluginapi.ModelRouteResponse{Handled: true, TargetKind: pluginapi.ModelRouteTargetExecutor, Target: "plugin-executor"}, true
+	}
+	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
+	handler.SetModelRouterHost(host)
+	ctx := WithAllowedModels(context.Background(), []string{"allowed-model"})
+	requestBody := []byte(`{"model":"forbidden-model"}`)
+
+	body, _, errMsg := handler.ExecuteWithAuthManager(ctx, "openai", "forbidden-model", requestBody, "")
+	if body != nil || errMsg == nil || errMsg.StatusCode != http.StatusForbidden {
+		t.Fatalf("ExecuteWithAuthManager() = %q, %#v; want HTTP 403", body, errMsg)
+	}
+	body, _, errMsg = handler.ExecuteCountWithAuthManager(ctx, "openai", "forbidden-model", requestBody, "")
+	if body != nil || errMsg == nil || errMsg.StatusCode != http.StatusForbidden {
+		t.Fatalf("ExecuteCountWithAuthManager() = %q, %#v; want HTTP 403", body, errMsg)
+	}
+	data, _, errChan := handler.ExecuteStreamWithAuthManager(ctx, "openai", "forbidden-model", requestBody, "")
+	if data != nil {
+		t.Fatalf("ExecuteStreamWithAuthManager() data = %v, want nil", data)
+	}
+	if errMsg = <-errChan; errMsg == nil || errMsg.StatusCode != http.StatusForbidden {
+		t.Fatalf("ExecuteStreamWithAuthManager() error = %#v, want HTTP 403", errMsg)
+	}
+	if host.called || host.lastPluginID != "" {
+		t.Fatalf("forbidden request reached router/executor: routed=%t plugin=%q", host.called, host.lastPluginID)
+	}
+
+	host.called = false
+	ctx = WithAllowedModels(context.Background(), []string{"allowed-model"})
+	ctx = WithAllowedAuthIDs(ctx, []string{"auth-file-a"})
+	requestBody = []byte(`{"model":"allowed-model"}`)
+	body, _, errMsg = handler.ExecuteWithAuthManager(ctx, "openai", "allowed-model", requestBody, "")
+	if body != nil || errMsg == nil || errMsg.StatusCode != http.StatusForbidden {
+		t.Fatalf("account-restricted plugin ExecuteWithAuthManager() = %q, %#v; want HTTP 403", body, errMsg)
+	}
+	if !host.called || host.lastPluginID != "" {
+		t.Fatalf("account-restricted plugin route state: routed=%t plugin=%q, want routed but not executed", host.called, host.lastPluginID)
+	}
+}
+
 func TestHandlerModelRouterRequiresPluginExecutorHost(t *testing.T) {
 	originalModel := "handler-router-only-original-model"
 	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)

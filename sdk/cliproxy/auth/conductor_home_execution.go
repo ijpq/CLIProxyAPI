@@ -105,7 +105,6 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			selection.End("missing_execution_target")
 			return cliproxyexecutor.Response{}, &Error{Code: "executor_not_found", Message: "executor not registered"}
 		}
-		m.observeHomeRetryLimit(auth, selection, homeRetryLimit)
 		if _, seen := tried[auth.ID]; seen {
 			if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "repeated_auth"); errEnd != nil {
 				return cliproxyexecutor.Response{}, errEnd
@@ -115,6 +114,14 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			}
 			return cliproxyexecutor.Response{}, repeatedHomeAuthError()
 		}
+		if !authAllowedByMetadata(auth, opts.Metadata) {
+			if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "auth_not_allowed"); errEnd != nil {
+				return cliproxyexecutor.Response{}, errEnd
+			}
+			tried[auth.ID] = struct{}{}
+			continue
+		}
+		m.observeHomeRetryLimit(auth, selection, homeRetryLimit)
 		tried[auth.ID] = struct{}{}
 		attempted[auth.ID] = struct{}{}
 		entry := logEntryWithRequestID(ctx)

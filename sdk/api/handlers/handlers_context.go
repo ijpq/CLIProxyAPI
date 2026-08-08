@@ -7,12 +7,15 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	"golang.org/x/net/context"
 )
 
 type pinnedAuthContextKey struct{}
 
 type allowedAuthIDsContextKey struct{}
+
+type allowedModelsContextKey struct{}
 
 type selectedAuthCallbackContextKey struct{}
 
@@ -97,6 +100,26 @@ func WithAllowedAuthIDs(ctx context.Context, authIDs []string) context.Context {
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, allowedAuthIDsContextKey{}, cleaned)
+}
+
+// WithAllowedModels returns a child context that restricts execution to the
+// given client-visible model names. The restriction is copied into execution
+// metadata so it is enforced after the concrete model is known, including for
+// WebSocket requests whose upgrade request has no JSON body.
+func WithAllowedModels(ctx context.Context, models []string) context.Context {
+	cleaned := make([]string, 0, len(models))
+	for _, model := range models {
+		if model = strings.TrimSpace(model); model != "" {
+			cleaned = append(cleaned, model)
+		}
+	}
+	if len(cleaned) == 0 {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, allowedModelsContextKey{}, cleaned)
 }
 
 // WithSelectedAuthIDCallback returns a child context that receives the selected auth ID.
@@ -203,6 +226,34 @@ func allowedAuthIDsFromContext(ctx context.Context) []string {
 		return v
 	}
 	return nil
+}
+
+func allowedModelsFromContext(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	if v, ok := ctx.Value(allowedModelsContextKey{}).([]string); ok {
+		return v
+	}
+	return nil
+}
+
+func modelAllowedFromContext(ctx context.Context, requested string) bool {
+	allowed := allowedModelsFromContext(ctx)
+	if len(allowed) == 0 {
+		return true
+	}
+	requested = strings.TrimSpace(thinking.ParseSuffix(requested).ModelName)
+	if requested == "" {
+		return false
+	}
+	for _, model := range allowed {
+		model = strings.TrimSpace(thinking.ParseSuffix(model).ModelName)
+		if strings.EqualFold(model, requested) {
+			return true
+		}
+	}
+	return false
 }
 
 func selectedAuthIDCallbackFromContext(ctx context.Context) func(string) {

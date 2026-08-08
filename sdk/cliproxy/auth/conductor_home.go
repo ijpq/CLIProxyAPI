@@ -928,20 +928,51 @@ func (m *Manager) pickNextViaHome(ctx context.Context, model string, opts clipro
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	selection, errSelection := m.pickHomeDispatchSelection(ctx, model, withHomeExcludedAuthIDs(opts, tried))
-	if errSelection != nil {
-		return nil, nil, "", errSelection
+	homeAuthCount := homeAuthCountFromMetadata(opts.Metadata)
+	excludedAuthIDs := homeExcludedAuthIDsFromMetadata(opts.Metadata)
+	exclusions := make(map[string]struct{}, len(tried)+len(excludedAuthIDs))
+	for _, authID := range excludedAuthIDs {
+		exclusions[authID] = struct{}{}
 	}
-	selectionAuth := selection.CloneAuth()
-	if selectionAuth == nil || homeAuthAlreadyTried(tried, selectionAuth.ID) {
-		selection.End("repeated_auth")
-		return nil, nil, "", repeatedHomeAuthError()
+	for authID := range tried {
+		if authID = strings.TrimSpace(authID); authID != "" {
+			exclusions[authID] = struct{}{}
+		}
 	}
-	auth := selection.CloneAuthForRoute(model)
-	executor := selection.Executor
-	provider := selection.Provider
-	selection.End("legacy_selection_unbound")
-	return auth, executor, provider, nil
+	for {
+		pickOpts := withHomeAuthCount(opts, homeAuthCount)
+		pickOpts = withHomeExcludedAuthIDs(pickOpts, exclusions)
+		selection, errSelection := m.pickHomeDispatchSelection(ctx, model, pickOpts)
+		if errSelection != nil {
+			return nil, nil, "", errSelection
+		}
+		selectionAuth := selection.CloneAuth()
+		if selectionAuth == nil {
+			selection.End("missing_auth")
+			return nil, nil, "", repeatedHomeAuthError()
+		}
+		authID := strings.TrimSpace(selectionAuth.ID)
+		if authID == "" {
+			selection.End("missing_auth")
+			return nil, nil, "", repeatedHomeAuthError()
+		}
+		if _, excluded := exclusions[authID]; excluded {
+			selection.End("repeated_auth")
+			return nil, nil, "", repeatedHomeAuthError()
+		}
+		if authAllowedByMetadata(selectionAuth, opts.Metadata) {
+			auth := selection.CloneAuthForRoute(model)
+			executor := selection.Executor
+			provider := selection.Provider
+			selection.End("legacy_selection_unbound")
+			return auth, executor, provider, nil
+		}
+		if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "auth_not_allowed"); errEnd != nil {
+			return nil, nil, "", errEnd
+		}
+		exclusions[authID] = struct{}{}
+		homeAuthCount++
+	}
 }
 
 func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, opts cliproxyexecutor.Options) (*HomeDispatchSelection, error) {

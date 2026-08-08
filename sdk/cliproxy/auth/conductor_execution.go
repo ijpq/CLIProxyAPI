@@ -120,6 +120,9 @@ func preferredExecutionAttemptError(fallback, upstream error) error {
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	req, opts = cliproxysession.Enrich(req, opts)
+	if errAccess := validateAllowedModel(opts.Metadata, req.Model); errAccess != nil {
+		return cliproxyexecutor.Response{}, errAccess
+	}
 	normalized := m.normalizeProviders(providers)
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
@@ -179,6 +182,9 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	req, opts = cliproxysession.Enrich(req, opts)
+	if errAccess := validateAllowedModel(opts.Metadata, req.Model); errAccess != nil {
+		return cliproxyexecutor.Response{}, errAccess
+	}
 	normalized := m.normalizeProviders(providers)
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
@@ -231,6 +237,9 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	req, opts = cliproxysession.Enrich(req, opts)
+	if errAccess := validateAllowedModel(opts.Metadata, req.Model); errAccess != nil {
+		return nil, errAccess
+	}
 	if m.HomeEnabled() {
 		if unlockSession := m.lockHomeWebsocketSession(ctx, opts); unlockSession != nil {
 			defer unlockSession()
@@ -883,9 +892,6 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			return nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 		}
-		if homeMode {
-			m.observeHomeRetryLimit(auth, selection, homeRetryLimit)
-		}
 		if selection != nil && allowSameAuthRetry && maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials && auth.ID != lastHomeAuthID {
 			if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "max_retry_credentials"); errEnd != nil {
 				return nil, errEnd
@@ -926,6 +932,22 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 					}
 				}
 			}
+		}
+		if !authAllowedByMetadata(auth, opts.Metadata) {
+			if selection == nil {
+				return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+			}
+			if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "auth_not_allowed"); errEnd != nil {
+				return nil, errEnd
+			}
+			homeExcludedAuthIDs[auth.ID] = struct{}{}
+			tried[auth.ID] = struct{}{}
+			homeSameAuthRetryPending = false
+			homeAuthCount++
+			continue
+		}
+		if homeMode {
+			m.observeHomeRetryLimit(auth, selection, homeRetryLimit)
 		}
 
 		entry := logEntryWithRequestID(ctx)
@@ -1557,34 +1579,86 @@ func pinnedAuthIDFromMetadata(meta map[string]any) string {
 // only narrows the candidate pool; the normal scheduler still load-balances
 // (round-robin / fill-first) among the surviving candidates.
 func allowedAuthIDsFromMetadata(meta map[string]any) map[string]struct{} {
+	return stringSetFromMetadata(meta, cliproxyexecutor.AllowedAuthIDsMetadataKey, false)
+}
+
+func allowedModelsFromMetadata(meta map[string]any) map[string]struct{} {
+	return stringSetFromMetadata(meta, cliproxyexecutor.AllowedModelsMetadataKey, true)
+}
+
+func stringSetFromMetadata(meta map[string]any, key string, canonicalModel bool) map[string]struct{} {
 	if len(meta) == 0 {
 		return nil
 	}
-	raw, ok := meta[cliproxyexecutor.AllowedAuthIDsMetadataKey]
+	raw, ok := meta[key]
 	if !ok || raw == nil {
 		return nil
 	}
-	var ids []string
+	var values []string
 	switch val := raw.(type) {
 	case []string:
-		ids = val
+		values = val
 	case string:
-		ids = strings.Split(val, ",")
+		values = strings.Split(val, ",")
 	case []byte:
-		ids = strings.Split(string(val), ",")
+		values = strings.Split(string(val), ",")
 	default:
 		return nil
 	}
-	set := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		if id = strings.TrimSpace(id); id != "" {
-			set[id] = struct{}{}
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if canonicalModel {
+			value = strings.ToLower(canonicalModelKey(value))
+		}
+		if value != "" {
+			set[value] = struct{}{}
 		}
 	}
 	if len(set) == 0 {
 		return nil
 	}
 	return set
+}
+
+func validateAllowedModel(meta map[string]any, fallback string) error {
+	allowed := allowedModelsFromMetadata(meta)
+	if allowed == nil {
+		return nil
+	}
+	requested := strings.TrimSpace(fallback)
+	if len(meta) > 0 {
+		switch value := meta[cliproxyexecutor.RequestedModelMetadataKey].(type) {
+		case string:
+			if value = strings.TrimSpace(value); value != "" {
+				requested = value
+			}
+		case []byte:
+			if value := strings.TrimSpace(string(value)); value != "" {
+				requested = value
+			}
+		}
+	}
+	if _, ok := allowed[strings.ToLower(canonicalModelKey(requested))]; ok {
+		return nil
+	}
+	return &Error{
+		Code:       "model_not_allowed",
+		Message:    "model not allowed for this account",
+		HTTPStatus: http.StatusForbidden,
+	}
+}
+
+func authAllowedByMetadata(auth *Auth, meta map[string]any) bool {
+	allowed := allowedAuthIDsFromMetadata(meta)
+	if allowed == nil {
+		return true
+	}
+	if auth == nil {
+		return false
+	}
+	_, ok := allowed[strings.TrimSpace(auth.ID)]
+	return ok
 }
 
 func disallowFreeAuthFromMetadata(meta map[string]any) bool {
