@@ -171,9 +171,9 @@ func Models() []string {
 	return fn()
 }
 
-// ValidModels filters names down to those that currently exist, preserving
-// order and dropping blanks/duplicates. When no lister is registered it returns
-// the cleaned input unchanged (best-effort validation).
+// ValidModels filters names down to those that currently exist, matching model
+// names case-insensitively while preserving request spelling and order. When no
+// lister is registered it returns the cleaned input unchanged (best-effort validation).
 func ValidModels(names []string) []string {
 	cleaned := make([]string, 0, len(names))
 	seen := make(map[string]struct{}, len(names))
@@ -194,11 +194,11 @@ func ValidModels(names []string) []string {
 	}
 	valid := make(map[string]struct{}, len(all))
 	for _, n := range all {
-		valid[n] = struct{}{}
+		valid[strings.ToLower(strings.TrimSpace(n))] = struct{}{}
 	}
 	out := make([]string, 0, len(cleaned))
 	for _, n := range cleaned {
-		if _, ok := valid[n]; ok {
+		if _, ok := valid[strings.ToLower(n)]; ok {
 			out = append(out, n)
 		}
 	}
