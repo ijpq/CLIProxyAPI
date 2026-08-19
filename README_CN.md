@@ -150,6 +150,12 @@ CLIProxyAPI 用户手册： [https://help.router-for.me/](https://help.router-fo
 - 凭据加载/更新: [docs/sdk-watcher_CN.md](docs/sdk-watcher_CN.md)
 - 自定义 Provider 示例：`examples/custom-provider`
 
+## 本 Fork 开发与部署文档
+
+- 开发交接、架构、发布流程和历史踩坑：[docs/DEVELOPER_HANDOFF_CN.md](docs/DEVELOPER_HANDOFF_CN.md)
+- Billing/Portal 部署与使用：[docs/billing-guide.md](docs/billing-guide.md)
+- 中国大陆网络优化：[CHINA_MAINLAND_NETWORK_OPTIMIZATION_CN.md](CHINA_MAINLAND_NETWORK_OPTIMIZATION_CN.md)
+
 ## 贡献
 
 欢迎贡献！请随时提交 Pull Request。

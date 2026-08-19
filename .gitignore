@@ -30,6 +30,7 @@ auths/*
 
 # Documentation
 docs/*
+!docs/DEVELOPER_HANDOFF_CN.md
 AGENTS.md
 CLAUDE.md
 GEMINI.md
