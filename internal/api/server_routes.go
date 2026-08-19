@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v8/internal/api/handlers/management"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
 	claudemodels "github.com/router-for-me/CLIProxyAPI/v8/internal/client/claude/models"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/live"
 	codexmodels "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/models"
@@ -358,13 +359,22 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 	}
 	ctx := context.WithValue(c.Request.Context(), "gin", c)
 	ctx = handlers.EnrichContextWithSessionHierarchy(ctx, selectionHeaders, body, nil)
-	selectionModel, errRoute := s.codexAlphaSearchSelectionModel(ctx, c, body, strings.TrimSpace(routing.Model))
+	requestedModel := strings.TrimSpace(routing.Model)
+	if !billing.ModelAllowed(ctx, requestedModel) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "model not allowed for this account", "model": requestedModel})
+		return
+	}
+	selectionModel, errRoute := s.codexAlphaSearchSelectionModel(ctx, c, body, requestedModel)
 	if errRoute != nil {
 		log.WithError(errRoute).Warn("codex alpha search: model router returned an unsupported target")
 		c.JSON(clienterror.HTTPStatusFromErrorOr(errRoute, http.StatusServiceUnavailable), gin.H{"error": errRoute.Error()})
 		return
 	}
-	selectionOpts := coreexecutor.Options{Headers: selectionHeaders, OriginalRequest: body}
+	selectionOpts := coreexecutor.Options{
+		Headers:         selectionHeaders,
+		OriginalRequest: body,
+		Metadata:        billing.ExecutionAccessMetadata(ctx, nil, requestedModel),
+	}
 	var selection *auth.HomeDispatchSelection
 	var selected *auth.Auth
 	if s.handlers.AuthManager.HomeEnabled() {
@@ -496,6 +506,7 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 		c.JSON(clienterror.HTTPStatusFromErrorOr(err, http.StatusBadGateway), gin.H{"error": err.Error()})
 		return
 	}
+
 	closeResponseBody := func() error {
 		errClose := resp.Body.Close()
 		if errClose != nil {

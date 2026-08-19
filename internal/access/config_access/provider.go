@@ -103,6 +103,25 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 	return nil, sdkaccess.NewInvalidCredentialError()
 }
 
+// Revalidate checks that a delegated credential's original config key is still active.
+func (p *provider) Revalidate(_ context.Context, previous *sdkaccess.Result) (*sdkaccess.Result, *sdkaccess.AuthError) {
+	if p == nil || previous == nil {
+		return nil, sdkaccess.NewInvalidCredentialError()
+	}
+	principal := strings.TrimSpace(previous.Principal)
+	if principal == "" {
+		return nil, sdkaccess.NewInvalidCredentialError()
+	}
+	if _, ok := p.keys[principal]; !ok {
+		return nil, sdkaccess.NewInvalidCredentialError()
+	}
+	return &sdkaccess.Result{
+		Provider:  p.Identifier(),
+		Principal: principal,
+		Metadata:  map[string]string{"source": "delegated"},
+	}, nil
+}
+
 func extractBearerToken(header string) string {
 	if header == "" {
 		return ""

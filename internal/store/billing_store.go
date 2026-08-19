@@ -66,23 +66,36 @@ func HashAPIKey(raw string) string {
 // LookupAPIKey resolves a hashed API key to its owning user. Revoked keys are
 // treated as missing.
 func (s *PostgresStore) LookupAPIKey(ctx context.Context, keyHash string) (APIKeyLookup, error) {
-	if s == nil || s.db == nil {
-		return APIKeyLookup{}, fmt.Errorf("postgres store: not initialized")
-	}
 	keyHash = strings.TrimSpace(keyHash)
 	if keyHash == "" {
 		return APIKeyLookup{}, ErrAPIKeyNotFound
 	}
+	return s.lookupAPIKey(ctx, "k.key_hash", keyHash)
+}
 
+// LookupAPIKeyByID refreshes the current owner and access state for an active
+// API-key row. It is used to revalidate delegated Realtime client secrets.
+func (s *PostgresStore) LookupAPIKeyByID(ctx context.Context, keyID string) (APIKeyLookup, error) {
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return APIKeyLookup{}, ErrAPIKeyNotFound
+	}
+	return s.lookupAPIKey(ctx, "k.id", keyID)
+}
+
+func (s *PostgresStore) lookupAPIKey(ctx context.Context, column, value string) (APIKeyLookup, error) {
+	if s == nil || s.db == nil {
+		return APIKeyLookup{}, fmt.Errorf("postgres store: not initialized")
+	}
 	query := fmt.Sprintf(
 		`SELECT k.id, k.user_id, u.unbilled, u.allowed_models, u.allowed_auth_ids
 		 FROM %s k JOIN %s u ON u.id = k.user_id
-		 WHERE k.key_hash = $1 AND k.revoked_at IS NULL`,
-		s.fullTableName(BillingAPIKeysTable), s.fullTableName(BillingUsersTable),
+		 WHERE %s = $1 AND k.revoked_at IS NULL`,
+		s.fullTableName(BillingAPIKeysTable), s.fullTableName(BillingUsersTable), column,
 	)
 	var out APIKeyLookup
 	var modelsRaw, authRaw string
-	err := s.db.QueryRowContext(ctx, query, keyHash).Scan(&out.ID, &out.UserID, &out.Unbilled, &modelsRaw, &authRaw)
+	err := s.db.QueryRowContext(ctx, query, value).Scan(&out.ID, &out.UserID, &out.Unbilled, &modelsRaw, &authRaw)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return APIKeyLookup{}, ErrAPIKeyNotFound
