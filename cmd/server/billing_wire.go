@@ -14,6 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/modules/portal"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
+	codexlive "github.com/router-for-me/CLIProxyAPI/v7/internal/client/codex/live"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
@@ -63,6 +64,35 @@ func resolveBillingStore(ctx context.Context, sharedPG *store.PostgresStore) *st
 	return pg
 }
 
+func billingModelCatalog(entries []map[string]any) []string {
+	additional := codexlive.ClientVisibleModels()
+	models := make([]string, 0, len(entries)+len(additional))
+	seen := make(map[string]struct{}, len(entries)+len(additional))
+	appendModel := func(model string) {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			return
+		}
+		key := strings.ToLower(model)
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		models = append(models, model)
+	}
+	for _, entry := range entries {
+		model, _ := entry["id"].(string)
+		appendModel(model)
+	}
+	if len(models) == 0 {
+		return nil
+	}
+	for _, model := range additional {
+		appendModel(model)
+	}
+	return models
+}
+
 // setupBilling wires the database-backed access provider and the portal module
 // when billing is enabled and a billing database is available. It returns the
 // additional api.ServerOption values that mount the portal routes; an empty
@@ -92,7 +122,7 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.Serv
 
 	// Register the DB-backed API key provider so inbound proxy requests can
 	// authenticate against the billing api_keys table.
-	dbaccess.Register("", pg.LookupAPIKey, pg.TouchAPIKeyLastUsed)
+	dbaccess.RegisterWithRevalidation("", pg.LookupAPIKey, pg.LookupAPIKeyByID, pg.TouchAPIKeyLastUsed)
 
 	// Register the metering plugin so token usage is priced and debited.
 	pricingPath := strings.TrimSpace(os.Getenv("BILLING_PRICING_FILE"))
@@ -141,21 +171,7 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.Serv
 	// Expose the full client-visible model list to the portal (admin's per-user
 	// model whitelist picker) via a lazy lister over the global model registry.
 	billing.SetModelLister(func() []string {
-		entries := registry.GetGlobalRegistry().GetAvailableModels("openai")
-		out := make([]string, 0, len(entries))
-		seen := make(map[string]struct{}, len(entries))
-		for _, e := range entries {
-			id, _ := e["id"].(string)
-			if id = strings.TrimSpace(id); id == "" {
-				continue
-			}
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			seen[id] = struct{}{}
-			out = append(out, id)
-		}
-		return out
+		return billingModelCatalog(registry.GetGlobalRegistry().GetAvailableModels("openai"))
 	})
 
 	meter := billing.NewMeterPlugin(pg, pricing)

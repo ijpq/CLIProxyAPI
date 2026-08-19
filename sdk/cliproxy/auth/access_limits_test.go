@@ -18,6 +18,51 @@ type accessLimitExecutor struct {
 	streamCalls  int
 }
 
+type outOfBandSelector struct {
+	selected *Auth
+}
+
+type inPlaceMutatingSelector struct {
+	mutate func(*Auth)
+}
+
+type selectorCredentialMetadata struct {
+	AccessToken string
+	Headers     map[string]string
+}
+
+type selectorOpaqueCredentialMetadata struct {
+	values map[string]string
+}
+
+func (m *selectorOpaqueCredentialMetadata) Set(key, value string) {
+	if m.values == nil {
+		m.values = make(map[string]string)
+	}
+	m.values[key] = value
+}
+
+func (m *selectorOpaqueCredentialMetadata) Value(key string) string {
+	if m == nil {
+		return ""
+	}
+	return m.values[key]
+}
+
+func (s *outOfBandSelector) Pick(context.Context, string, string, cliproxyexecutor.Options, []*Auth) (*Auth, error) {
+	return s.selected, nil
+}
+
+func (s *inPlaceMutatingSelector) Pick(_ context.Context, _ string, _ string, _ cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	if len(auths) == 0 {
+		return nil, nil
+	}
+	if s != nil && s.mutate != nil {
+		s.mutate(auths[0])
+	}
+	return auths[0], nil
+}
+
 func (e *accessLimitExecutor) Identifier() string { return e.provider }
 
 func (e *accessLimitExecutor) Execute(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
@@ -161,6 +206,300 @@ func TestManagerAllowedAuthIDsRestrictSchedulerToAuthFileModels(t *testing.T) {
 	}
 }
 
+func TestManagerAllowedAuthIDsRejectOutOfBandSelectorResult(t *testing.T) {
+	const (
+		provider = "access-custom-selector-provider"
+		model    = "access-custom-selector-model"
+	)
+	registerSchedulerModels(t, provider, model, "auth-allowed", "auth-denied")
+	denied := &Auth{ID: "auth-denied", Provider: provider}
+	manager := NewManager(nil, &outOfBandSelector{selected: denied}, nil)
+	manager.RegisterExecutor(&accessLimitExecutor{provider: provider})
+	for _, candidate := range []*Auth{{ID: "auth-allowed", Provider: provider}, denied} {
+		if _, errRegister := manager.Register(context.Background(), candidate); errRegister != nil {
+			t.Fatalf("Register(%s) error = %v", candidate.ID, errRegister)
+		}
+	}
+	opts := cliproxyexecutor.Options{Metadata: map[string]any{
+		cliproxyexecutor.AllowedAuthIDsMetadataKey: []string{"auth-allowed"},
+	}}
+
+	selected, errPick := manager.SelectAuth(context.Background(), provider, model, opts)
+	if selected != nil {
+		t.Fatalf("SelectAuth() auth = %#v, want nil", selected)
+	}
+	var authErr *Error
+	if !errors.As(errPick, &authErr) || authErr.Code != "auth_not_found" {
+		t.Fatalf("SelectAuth() error = %#v, want auth_not_found", errPick)
+	}
+}
+
+func TestManagerCustomSelectorCannotMutateEligibleAuthsAcrossModes(t *testing.T) {
+	pickers := []struct {
+		name string
+		pick func(*Manager, string, string, cliproxyexecutor.Options) (*Auth, error)
+	}{
+		{
+			name: "single",
+			pick: func(manager *Manager, provider, model string, opts cliproxyexecutor.Options) (*Auth, error) {
+				return manager.SelectAuth(context.Background(), provider, model, opts)
+			},
+		},
+		{
+			name: "mixed",
+			pick: func(manager *Manager, provider, model string, opts cliproxyexecutor.Options) (*Auth, error) {
+				selected, _, _, errPick := manager.pickNextMixedLegacy(context.Background(), []string{provider}, model, opts, nil)
+				return selected, errPick
+			},
+		},
+	}
+
+	for _, picker := range pickers {
+		t.Run(picker.name+"/changed_id", func(t *testing.T) {
+			provider := "selector-mutation-" + picker.name
+			model := "selector-mutation-model-" + picker.name
+			const authID = "auth-allowed"
+			registerSchedulerModels(t, provider, model, authID)
+			selector := &inPlaceMutatingSelector{mutate: func(auth *Auth) {
+				auth.ID = "auth-denied"
+			}}
+			manager := NewManager(nil, selector, nil)
+			manager.RegisterExecutor(&accessLimitExecutor{provider: provider})
+			if _, errRegister := manager.Register(context.Background(), &Auth{ID: authID, Provider: provider}); errRegister != nil {
+				t.Fatalf("Register() error = %v", errRegister)
+			}
+			opts := cliproxyexecutor.Options{Metadata: map[string]any{
+				cliproxyexecutor.AllowedAuthIDsMetadataKey: []string{authID},
+			}}
+
+			selected, errPick := picker.pick(manager, provider, model, opts)
+			if selected != nil {
+				t.Fatalf("selected auth = %#v, want nil", selected)
+			}
+			var authErr *Error
+			if !errors.As(errPick, &authErr) || authErr.Code != "auth_not_found" {
+				t.Fatalf("selection error = %#v, want auth_not_found", errPick)
+			}
+		})
+
+		t.Run(picker.name+"/changed_fields", func(t *testing.T) {
+			provider := "selector-canonical-" + picker.name
+			model := "selector-canonical-model-" + picker.name
+			const authID = "auth-allowed"
+			registerSchedulerModels(t, provider, model, authID)
+			selector := &inPlaceMutatingSelector{mutate: func(auth *Auth) {
+				auth.Provider = "other-provider"
+				auth.Attributes[AttributeAuthKind] = AuthKindAPIKey
+			}}
+			manager := NewManager(nil, selector, nil)
+			manager.RegisterExecutor(&accessLimitExecutor{provider: provider})
+			candidate := &Auth{
+				ID:         authID,
+				Provider:   provider,
+				Attributes: map[string]string{AttributeAuthKind: AuthKindOAuth},
+			}
+			if _, errRegister := manager.Register(context.Background(), candidate); errRegister != nil {
+				t.Fatalf("Register() error = %v", errRegister)
+			}
+			opts := cliproxyexecutor.Options{Metadata: map[string]any{
+				cliproxyexecutor.AllowedAuthIDsMetadataKey: []string{authID},
+			}}
+
+			selected, errPick := picker.pick(manager, provider, model, opts)
+			if errPick != nil {
+				t.Fatalf("selection error = %v", errPick)
+			}
+			if selected == nil || selected.ID != authID || selected.Provider != provider || selected.AuthKind() != AuthKindOAuth {
+				t.Fatalf("selected auth = %#v, want canonical %s/%s OAuth auth", selected, provider, authID)
+			}
+		})
+
+		t.Run(picker.name+"/nested_metadata", func(t *testing.T) {
+			provider := "selector-metadata-" + picker.name
+			model := "selector-metadata-model-" + picker.name
+			const authID = "auth-allowed"
+			registerSchedulerModels(t, provider, model, authID)
+			selector := &inPlaceMutatingSelector{mutate: func(auth *Auth) {
+				token, _ := auth.Metadata["token"].(map[string]any)
+				token["access_token"] = "mutated-token"
+			}}
+			manager := NewManager(nil, selector, nil)
+			manager.RegisterExecutor(&accessLimitExecutor{provider: provider})
+			candidate := &Auth{
+				ID:       authID,
+				Provider: provider,
+				Metadata: map[string]any{
+					"token": map[string]any{"access_token": "original-token"},
+				},
+			}
+			if _, errRegister := manager.Register(context.Background(), candidate); errRegister != nil {
+				t.Fatalf("Register() error = %v", errRegister)
+			}
+			opts := cliproxyexecutor.Options{Metadata: map[string]any{
+				cliproxyexecutor.AllowedAuthIDsMetadataKey: []string{authID},
+			}}
+
+			selected, errPick := picker.pick(manager, provider, model, opts)
+			if errPick != nil {
+				t.Fatalf("selection error = %v", errPick)
+			}
+			if selected == nil {
+				t.Fatal("selected auth is nil")
+			}
+			selectedToken, _ := selected.Metadata["token"].(map[string]any)
+			if selectedToken["access_token"] != "original-token" {
+				t.Fatalf("selected nested token = %#v, want original-token", selectedToken["access_token"])
+			}
+			stored, ok := manager.GetByID(authID)
+			if !ok {
+				t.Fatal("stored auth is missing")
+			}
+			storedToken, _ := stored.Metadata["token"].(map[string]any)
+			if storedToken["access_token"] != "original-token" {
+				t.Fatalf("stored nested token = %#v, want original-token", storedToken["access_token"])
+			}
+		})
+
+		t.Run(picker.name+"/pointer_scalar_metadata", func(t *testing.T) {
+			provider := "selector-pointer-scalar-" + picker.name
+			model := "selector-pointer-scalar-model-" + picker.name
+			const authID = "auth-allowed"
+			registerSchedulerModels(t, provider, model, authID)
+			selector := &inPlaceMutatingSelector{mutate: func(auth *Auth) {
+				token, _ := auth.Metadata["token"].(*string)
+				*token = "mutated-token"
+			}}
+			manager := NewManager(nil, selector, nil)
+			manager.RegisterExecutor(&accessLimitExecutor{provider: provider})
+			originalToken := "original-token"
+			candidate := &Auth{
+				ID:       authID,
+				Provider: provider,
+				Metadata: map[string]any{"token": &originalToken},
+			}
+			if _, errRegister := manager.Register(context.Background(), candidate); errRegister != nil {
+				t.Fatalf("Register() error = %v", errRegister)
+			}
+			opts := cliproxyexecutor.Options{Metadata: map[string]any{
+				cliproxyexecutor.AllowedAuthIDsMetadataKey: []string{authID},
+			}}
+
+			selected, errPick := picker.pick(manager, provider, model, opts)
+			if errPick != nil {
+				t.Fatalf("selection error = %v", errPick)
+			}
+			selectedToken, _ := selected.Metadata["token"].(*string)
+			if selectedToken == nil || *selectedToken != "original-token" {
+				t.Fatalf("selected pointer token = %#v, want original-token", selectedToken)
+			}
+			stored, ok := manager.GetByID(authID)
+			if !ok {
+				t.Fatal("stored auth is missing")
+			}
+			storedToken, _ := stored.Metadata["token"].(*string)
+			if storedToken == nil || *storedToken != "original-token" || originalToken != "original-token" {
+				t.Fatalf("stored pointer token = %#v and source = %q, want original-token", storedToken, originalToken)
+			}
+		})
+
+		t.Run(picker.name+"/pointer_struct_metadata", func(t *testing.T) {
+			provider := "selector-pointer-struct-" + picker.name
+			model := "selector-pointer-struct-model-" + picker.name
+			const authID = "auth-allowed"
+			registerSchedulerModels(t, provider, model, authID)
+			selector := &inPlaceMutatingSelector{mutate: func(auth *Auth) {
+				credential, _ := auth.Metadata["credential"].(*selectorCredentialMetadata)
+				credential.AccessToken = "mutated-token"
+				credential.Headers["authorization"] = "mutated-header"
+			}}
+			manager := NewManager(nil, selector, nil)
+			manager.RegisterExecutor(&accessLimitExecutor{provider: provider})
+			credential := &selectorCredentialMetadata{
+				AccessToken: "original-token",
+				Headers:     map[string]string{"authorization": "original-header"},
+			}
+			candidate := &Auth{
+				ID:       authID,
+				Provider: provider,
+				Metadata: map[string]any{"credential": credential},
+			}
+			if _, errRegister := manager.Register(context.Background(), candidate); errRegister != nil {
+				t.Fatalf("Register() error = %v", errRegister)
+			}
+			opts := cliproxyexecutor.Options{Metadata: map[string]any{
+				cliproxyexecutor.AllowedAuthIDsMetadataKey: []string{authID},
+			}}
+
+			selected, errPick := picker.pick(manager, provider, model, opts)
+			if errPick != nil {
+				t.Fatalf("selection error = %v", errPick)
+			}
+			selectedCredential, _ := selected.Metadata["credential"].(*selectorCredentialMetadata)
+			if selectedCredential == nil || selectedCredential.AccessToken != "original-token" || selectedCredential.Headers["authorization"] != "original-header" {
+				t.Fatalf("selected credential = %#v, want original values", selectedCredential)
+			}
+			stored, ok := manager.GetByID(authID)
+			if !ok {
+				t.Fatal("stored auth is missing")
+			}
+			storedCredential, _ := stored.Metadata["credential"].(*selectorCredentialMetadata)
+			if storedCredential == nil || storedCredential.AccessToken != "original-token" || storedCredential.Headers["authorization"] != "original-header" {
+				t.Fatalf("stored credential = %#v, want original values", storedCredential)
+			}
+			if credential.AccessToken != "original-token" || credential.Headers["authorization"] != "original-header" {
+				t.Fatalf("source credential = %#v, want original values", credential)
+			}
+		})
+
+		t.Run(picker.name+"/opaque_struct_metadata", func(t *testing.T) {
+			provider := "selector-opaque-struct-" + picker.name
+			model := "selector-opaque-struct-model-" + picker.name
+			const authID = "auth-allowed"
+			registerSchedulerModels(t, provider, model, authID)
+			selector := &inPlaceMutatingSelector{mutate: func(auth *Auth) {
+				credential, _ := auth.Metadata["credential"].(*selectorOpaqueCredentialMetadata)
+				credential.Set("access_token", "mutated-token")
+			}}
+			manager := NewManager(nil, selector, nil)
+			manager.RegisterExecutor(&accessLimitExecutor{provider: provider})
+			credential := &selectorOpaqueCredentialMetadata{
+				values: map[string]string{"access_token": "original-token"},
+			}
+			candidate := &Auth{
+				ID:       authID,
+				Provider: provider,
+				Metadata: map[string]any{"credential": credential},
+			}
+			if _, errRegister := manager.Register(context.Background(), candidate); errRegister != nil {
+				t.Fatalf("Register() error = %v", errRegister)
+			}
+			opts := cliproxyexecutor.Options{Metadata: map[string]any{
+				cliproxyexecutor.AllowedAuthIDsMetadataKey: []string{authID},
+			}}
+
+			selected, errPick := picker.pick(manager, provider, model, opts)
+			if errPick != nil {
+				t.Fatalf("selection error = %v", errPick)
+			}
+			selectedCredential, _ := selected.Metadata["credential"].(*selectorOpaqueCredentialMetadata)
+			if selectedCredential == nil || selectedCredential.Value("access_token") != "original-token" {
+				t.Fatalf("selected opaque credential = %#v, want original-token", selectedCredential)
+			}
+			stored, ok := manager.GetByID(authID)
+			if !ok {
+				t.Fatal("stored auth is missing")
+			}
+			storedCredential, _ := stored.Metadata["credential"].(*selectorOpaqueCredentialMetadata)
+			if storedCredential == nil || storedCredential.Value("access_token") != "original-token" {
+				t.Fatalf("stored opaque credential = %#v, want original-token", storedCredential)
+			}
+			if credential.Value("access_token") != "original-token" {
+				t.Fatalf("source opaque credential = %#v, want original-token", credential)
+			}
+		})
+	}
+}
+
 func TestManagerAllowedAuthIDsRestrictMixedProviderScheduler(t *testing.T) {
 	const model = "mixed-access-model"
 	registerSchedulerModels(t, "gemini", model, "gemini-auth")
@@ -229,5 +568,131 @@ func TestManagerHomeExecutionSkipsDisallowedAuthIDs(t *testing.T) {
 	}
 	if got := dispatcher.counts; len(got) != 4 || got[2] != 1 || got[3] != 2 {
 		t.Fatalf("Home auth counts after stream = %v, want [1 2 1 2]", got)
+	}
+}
+
+func TestManagerHomeExecutionEnforcesPinnedAuthAcrossModes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(*Manager, cliproxyexecutor.Options) error
+	}{
+		{
+			name: "execute",
+			run: func(manager *Manager, opts cliproxyexecutor.Options) error {
+				_, errExecute := manager.Execute(context.Background(), []string{"home-access"}, cliproxyexecutor.Request{Model: "home-model"}, opts)
+				return errExecute
+			},
+		},
+		{
+			name: "count",
+			run: func(manager *Manager, opts cliproxyexecutor.Options) error {
+				_, errCount := manager.ExecuteCount(context.Background(), []string{"home-access"}, cliproxyexecutor.Request{Model: "home-model"}, opts)
+				return errCount
+			},
+		},
+		{
+			name: "stream",
+			run: func(manager *Manager, opts cliproxyexecutor.Options) error {
+				stream, errStream := manager.ExecuteStream(context.Background(), []string{"home-access"}, cliproxyexecutor.Request{Model: "home-model"}, opts)
+				if errStream != nil {
+					return errStream
+				}
+				for range stream.Chunks {
+				}
+				return nil
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dispatcher := &authKindHomeDispatcher{auths: []Auth{
+				{ID: "home-other", Provider: "home-access", Metadata: map[string]any{"access_token": "token-a"}},
+				{ID: "home-pinned", Provider: "home-access", Metadata: map[string]any{"access_token": "token-b"}},
+			}}
+			manager := NewManager(nil, nil, nil)
+			manager.SetConfig(&internalconfig.Config{Home: internalconfig.HomeConfig{Enabled: true}})
+			registry := executionregistry.New()
+			manager.PublishHomeDispatch(dispatcher, registry, 1)
+			manager.RegisterExecutor(&accessLimitExecutor{provider: "home-access"})
+			selectedAuthID := ""
+			opts := cliproxyexecutor.Options{Metadata: map[string]any{
+				cliproxyexecutor.PinnedAuthMetadataKey: "home-pinned",
+				cliproxyexecutor.SelectedAuthCallbackMetadataKey: func(authID string) {
+					selectedAuthID = authID
+				},
+			}}
+
+			if errRun := test.run(manager, opts); errRun != nil {
+				t.Fatalf("%s error = %v", test.name, errRun)
+			}
+			if selectedAuthID != "home-pinned" {
+				t.Fatalf("selected auth = %q, want home-pinned", selectedAuthID)
+			}
+			if got := dispatcher.counts; len(got) != 2 || got[0] != 1 || got[1] != 2 {
+				t.Fatalf("Home auth counts = %v, want [1 2]", got)
+			}
+			if errDrain := registry.Drain(context.Background()); errDrain != nil {
+				t.Fatalf("Drain() error = %v", errDrain)
+			}
+		})
+	}
+}
+
+func TestManagerHomeExecutionStopsOnRepeatedIneligibleAuthAcrossModes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(*Manager, cliproxyexecutor.Options) error
+	}{
+		{
+			name: "execute",
+			run: func(manager *Manager, opts cliproxyexecutor.Options) error {
+				_, errExecute := manager.Execute(context.Background(), []string{"home-access"}, cliproxyexecutor.Request{Model: "home-model"}, opts)
+				return errExecute
+			},
+		},
+		{
+			name: "count",
+			run: func(manager *Manager, opts cliproxyexecutor.Options) error {
+				_, errCount := manager.ExecuteCount(context.Background(), []string{"home-access"}, cliproxyexecutor.Request{Model: "home-model"}, opts)
+				return errCount
+			},
+		},
+		{
+			name: "stream",
+			run: func(manager *Manager, opts cliproxyexecutor.Options) error {
+				_, errStream := manager.ExecuteStream(context.Background(), []string{"home-access"}, cliproxyexecutor.Request{Model: "home-model"}, opts)
+				return errStream
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dispatcher := &authKindHomeDispatcher{auths: []Auth{
+				{ID: "home-other", Provider: "home-access", Metadata: map[string]any{"access_token": "token-a"}},
+				{ID: "home-other", Provider: "home-access", Metadata: map[string]any{"access_token": "token-a"}},
+			}}
+			manager := NewManager(nil, nil, nil)
+			manager.SetConfig(&internalconfig.Config{Home: internalconfig.HomeConfig{Enabled: true}})
+			registry := executionregistry.New()
+			manager.PublishHomeDispatch(dispatcher, registry, 1)
+			executor := &accessLimitExecutor{provider: "home-access"}
+			manager.RegisterExecutor(executor)
+			opts := cliproxyexecutor.Options{Metadata: map[string]any{
+				cliproxyexecutor.PinnedAuthMetadataKey: "home-pinned",
+			}}
+
+			errRun := test.run(manager, opts)
+			var authErr *Error
+			if !errors.As(errRun, &authErr) || authErr.Code != homeRequestRetryExceededErrorCode {
+				t.Fatalf("%s error = %#v, want %s", test.name, errRun, homeRequestRetryExceededErrorCode)
+			}
+			if got := dispatcher.counts; len(got) != 2 || got[0] != 1 || got[1] != 2 {
+				t.Fatalf("Home auth counts = %v, want [1 2]", got)
+			}
+			if executor.executeCalls != 0 || executor.countCalls != 0 || executor.streamCalls != 0 {
+				t.Fatalf("ineligible auth reached executor: execute=%d count=%d stream=%d", executor.executeCalls, executor.countCalls, executor.streamCalls)
+			}
+			if errDrain := registry.Drain(context.Background()); errDrain != nil {
+				t.Fatalf("Drain() error = %v", errDrain)
+			}
+		})
 	}
 }

@@ -880,6 +880,145 @@ func cloneAuthSlice(auths []*Auth) []*Auth {
 	return out
 }
 
+func cloneAuthSliceForSelector(auths []*Auth) []*Auth {
+	out := cloneAuthSlice(auths)
+	for _, auth := range out {
+		if auth != nil {
+			auth.Metadata = cloneSelectorMetadata(auth.Metadata)
+		}
+	}
+	return out
+}
+
+func cloneSelectorMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	visited := make(map[selectorMetadataCloneVisit]reflect.Value)
+	out := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		out[key] = cloneSelectorMetadataValue(reflect.ValueOf(value), visited)
+	}
+	return out
+}
+
+type selectorMetadataCloneVisit struct {
+	typ reflect.Type
+	ptr uintptr
+}
+
+func cloneSelectorMetadataValue(value reflect.Value, visited map[selectorMetadataCloneVisit]reflect.Value) any {
+	cloned := cloneSelectorMetadataReflectValue(value, visited)
+	if !cloned.IsValid() {
+		return nil
+	}
+	return cloned.Interface()
+}
+
+func cloneSelectorMetadataReflectValue(value reflect.Value, visited map[selectorMetadataCloneVisit]reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return reflect.Value{}
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		return cloneSelectorMetadataReflectValue(value.Elem(), visited)
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := selectorMetadataCloneVisit{typ: value.Type(), ptr: value.Pointer()}
+		if existing, ok := visited[visit]; ok {
+			return existing
+		}
+		out := reflect.New(value.Type().Elem())
+		visited[visit] = out
+		clonedElem := cloneSelectorMetadataReflectValue(value.Elem(), visited)
+		if clonedElem.IsValid() {
+			out.Elem().Set(adaptSelectorMetadataClone(value.Elem(), clonedElem))
+		}
+		return out
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := selectorMetadataCloneVisit{typ: value.Type(), ptr: value.Pointer()}
+		if existing, ok := visited[visit]; ok {
+			return existing
+		}
+		out := reflect.MakeMapWithSize(value.Type(), value.Len())
+		visited[visit] = out
+		iter := value.MapRange()
+		for iter.Next() {
+			originalKey := iter.Key()
+			clonedKey := cloneSelectorMetadataReflectValue(originalKey, visited)
+			originalValue := iter.Value()
+			clonedValue := cloneSelectorMetadataReflectValue(originalValue, visited)
+			out.SetMapIndex(
+				adaptSelectorMetadataClone(originalKey, clonedKey),
+				adaptSelectorMetadataClone(originalValue, clonedValue),
+			)
+		}
+		return out
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := selectorMetadataCloneVisit{typ: value.Type(), ptr: value.Pointer()}
+		if existing, ok := visited[visit]; ok {
+			return existing
+		}
+		out := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		visited[visit] = out
+		for index := 0; index < value.Len(); index++ {
+			original := value.Index(index)
+			cloned := cloneSelectorMetadataReflectValue(original, visited)
+			out.Index(index).Set(adaptSelectorMetadataClone(original, cloned))
+		}
+		return out
+	case reflect.Array:
+		out := reflect.New(value.Type()).Elem()
+		for index := 0; index < value.Len(); index++ {
+			original := value.Index(index)
+			cloned := cloneSelectorMetadataReflectValue(original, visited)
+			out.Index(index).Set(adaptSelectorMetadataClone(original, cloned))
+		}
+		return out
+	case reflect.Struct:
+		out := reflect.New(value.Type()).Elem()
+		// Omit opaque fields rather than retaining references the selector could mutate.
+		for index := 0; index < value.NumField(); index++ {
+			if value.Type().Field(index).PkgPath != "" || !out.Field(index).CanSet() {
+				continue
+			}
+			original := value.Field(index)
+			cloned := cloneSelectorMetadataReflectValue(original, visited)
+			out.Field(index).Set(adaptSelectorMetadataClone(original, cloned))
+		}
+		return out
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return reflect.Zero(value.Type())
+	default:
+		return value
+	}
+}
+
+func adaptSelectorMetadataClone(original, cloned reflect.Value) reflect.Value {
+	if !cloned.IsValid() {
+		return original
+	}
+	if cloned.Type().AssignableTo(original.Type()) {
+		return cloned
+	}
+	if cloned.Type().ConvertibleTo(original.Type()) {
+		return cloned.Convert(original.Type())
+	}
+	return original
+}
+
 func schedulerAuthCandidates(auths []*Auth) []pluginapi.SchedulerAuthCandidate {
 	if len(auths) == 0 {
 		return nil
@@ -1902,13 +2041,20 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	if !handled {
 		selectorCtx := selectorContextForAvailableAuths(ctx, selector, model)
 		selectorCtx = withSessionAffinityTransientAuthIDs(selectorCtx, transientAuthIDs)
-		selected, errPick = selector.Pick(selectorCtx, provider, selectionArgForSelector(selector, model), opts, selectorAuths)
+		// Isolate selector input so in-place mutations cannot alter the canonical eligible set.
+		selected, errPick = selector.Pick(selectorCtx, provider, selectionArgForSelector(selector, model), opts, cloneAuthSliceForSelector(selectorAuths))
 		if errPick != nil {
 			if isBuiltInSelector(selector) {
 				errPick = restoreModelCooldownErrorModel(errPick, model)
 			}
 			m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errPick)
 			return nil, nil, errPick
+		}
+		if selected != nil {
+			selected = pickSchedulerAuthByID(selectorAuths, selected.ID)
+			if selected == nil {
+				return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned an ineligible auth"}
+			}
 		}
 	}
 	if selected == nil {
@@ -2017,8 +2163,8 @@ func (m *Manager) SelectHomeAuthWithCredentialPolicy(ctx context.Context, provid
 		}
 		providerMatches := strings.TrimSpace(provider) == "" || strings.EqualFold(strings.TrimSpace(selection.Provider), strings.TrimSpace(provider))
 		policyMatches := credentialPolicyAllows(policy, selection.Auth)
-		allowedMatches := authAllowedByMetadata(selection.Auth, opts.Metadata)
-		if providerMatches && policyMatches && allowedMatches {
+		accessMismatch := authAccessMetadataMismatch(selection.Auth, opts.Metadata)
+		if providerMatches && policyMatches && accessMismatch == "" {
 			return selection, nil
 		}
 
@@ -2029,8 +2175,8 @@ func (m *Manager) SelectHomeAuthWithCredentialPolicy(ctx context.Context, provid
 		reason := "credential_policy_mismatch"
 		if !providerMatches {
 			reason = "provider_mismatch"
-		} else if !allowedMatches {
-			reason = "auth_not_allowed"
+		} else if accessMismatch != "" {
+			reason = accessMismatch
 		}
 		if errEnd := m.endHomeSelectionBeforeRedispatch(selectionCtx, selection, reason); errEnd != nil {
 			return nil, errEnd
@@ -2068,8 +2214,8 @@ func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, mod
 		providerMatches := strings.TrimSpace(provider) == "" || strings.EqualFold(strings.TrimSpace(selection.Provider), strings.TrimSpace(provider))
 		selectionAuth := selection.CloneAuth()
 		kindMatches := selectionAuth != nil && selectionAuth.AuthKind() == requiredKind
-		allowedMatches := authAllowedByMetadata(selectionAuth, opts.Metadata)
-		if providerMatches && kindMatches && allowedMatches {
+		accessMismatch := authAccessMetadataMismatch(selectionAuth, opts.Metadata)
+		if providerMatches && kindMatches && accessMismatch == "" {
 			return selection, nil
 		}
 
@@ -2080,8 +2226,8 @@ func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, mod
 		reason := "auth_kind_mismatch"
 		if !providerMatches {
 			reason = "provider_mismatch"
-		} else if !allowedMatches {
-			reason = "auth_not_allowed"
+		} else if accessMismatch != "" {
+			reason = accessMismatch
 		}
 		if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, reason); errEnd != nil {
 			return nil, errEnd
@@ -2260,13 +2406,20 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	if !handled {
 		selectorCtx := selectorContextForAvailableAuths(ctx, selector, model)
 		selectorCtx = withSessionAffinityTransientAuthIDs(selectorCtx, transientAuthIDs)
-		selected, errPick = selector.Pick(selectorCtx, "mixed", selectionArgForSelector(selector, model), opts, selectorAuths)
+		// Isolate selector input so in-place mutations cannot alter the canonical eligible set.
+		selected, errPick = selector.Pick(selectorCtx, "mixed", selectionArgForSelector(selector, model), opts, cloneAuthSliceForSelector(selectorAuths))
 		if errPick != nil {
 			if isBuiltInSelector(selector) {
 				errPick = restoreModelCooldownErrorModel(errPick, model)
 			}
 			m.warnLogAuthUnavailable(ctx, providers, model, opts, tried, errPick)
 			return nil, nil, "", errPick
+		}
+		if selected != nil {
+			selected = pickSchedulerAuthByID(selectorAuths, selected.ID)
+			if selected == nil {
+				return nil, nil, "", &Error{Code: "auth_not_found", Message: "selector returned an ineligible auth"}
+			}
 		}
 	}
 	if selected == nil {
