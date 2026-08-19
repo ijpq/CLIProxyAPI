@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -239,6 +240,27 @@ func realtimeAuthMiddleware(manager *sdkaccess.Manager, handler *codexlive.Handl
 			}})
 			return
 		}
+		authorization, errRevalidate := revalidateRealtimeClientSecret(c.Request.Context(), manager, authorization)
+		if errRevalidate != nil {
+			status := errRevalidate.HTTPStatusCode()
+			if status == http.StatusUnauthorized {
+				handler.CloseRevokedClientSecretSession(c, authorization)
+			}
+			errorType := "authentication_error"
+			code := "invalid_realtime_client_secret"
+			if status >= http.StatusInternalServerError {
+				log.Errorf("Realtime client secret revalidation error: %v", errRevalidate)
+				errorType = "server_error"
+				code = "authentication_service_error"
+			}
+			c.AbortWithStatusJSON(status, gin.H{"error": gin.H{
+				"message": errRevalidate.Message,
+				"type":    errorType,
+				"param":   nil,
+				"code":    code,
+			}})
+			return
+		}
 		principal := authorization.IssuerPrincipal
 		if principal == "" {
 			principal = authorization.Principal
@@ -249,8 +271,74 @@ func realtimeAuthMiddleware(manager *sdkaccess.Manager, handler *codexlive.Handl
 		}
 		c.Set("userApiKey", principal)
 		c.Set("accessProvider", provider)
+		if len(authorization.IssuerMetadata) > 0 {
+			c.Set("accessMetadata", authorization.IssuerMetadata)
+		}
 		c.Set(codexlive.ClientSecretSessionContextKey, authorization.Session)
 		c.Set(codexlive.ClientSecretPrincipalContextKey, authorization.Principal)
+		c.Set(codexlive.ClientSecretRequestedModelContextKey, authorization.RequestedModel)
+		ctx := c.Request.Context()
+		if authorization.IssuerUserID != "" {
+			c.Set(billing.MetadataKeyUserID, authorization.IssuerUserID)
+			ctx = billing.WithUserID(ctx, authorization.IssuerUserID)
+		}
+		if authorization.IssuerAPIKeyID != "" {
+			c.Set(billing.MetadataKeyAPIKeyID, authorization.IssuerAPIKeyID)
+			ctx = billing.WithAPIKeyID(ctx, authorization.IssuerAPIKeyID)
+		}
+		if authorization.IssuerUnbilled {
+			ctx = billing.WithUnbilled(ctx)
+		}
+		ctx = billing.WithAllowedAuthIDs(ctx, authorization.AllowedAuthIDs)
+		ctx = billing.WithAllowedModels(ctx, authorization.AllowedModels)
+		c.Request = c.Request.WithContext(ctx)
+		if runPostAuthHandlers(c) {
+			return
+		}
 		c.Next()
 	}
+}
+
+func revalidateRealtimeClientSecret(ctx context.Context, manager *sdkaccess.Manager, authorization codexlive.ClientSecretAuthorization) (codexlive.ClientSecretAuthorization, *sdkaccess.AuthError) {
+	issuerProvider := strings.TrimSpace(authorization.IssuerProvider)
+	revalidationRequired := authorization.IssuerAPIKeyID != "" || issuerProvider == sdkaccess.DefaultAccessProviderName || issuerProvider == sdkaccess.DefaultDBAccessProviderName
+	if manager == nil {
+		if revalidationRequired {
+			return authorization, sdkaccess.NewInternalAuthError("Realtime client secret issuer cannot be revalidated", nil)
+		}
+		return authorization, nil
+	}
+	metadata := make(map[string]string, len(authorization.IssuerMetadata)+1)
+	for key, value := range authorization.IssuerMetadata {
+		metadata[key] = value
+	}
+	if authorization.IssuerAPIKeyID != "" {
+		metadata[billing.MetadataKeyAPIKeyID] = authorization.IssuerAPIKeyID
+	}
+	result, handled, authErr := manager.Revalidate(ctx, &sdkaccess.Result{
+		Provider:  authorization.IssuerProvider,
+		Principal: authorization.IssuerPrincipal,
+		Metadata:  metadata,
+	})
+	if authErr != nil {
+		return authorization, authErr
+	}
+	if !handled {
+		if revalidationRequired {
+			return authorization, sdkaccess.NewInternalAuthError("Realtime client secret issuer cannot be revalidated", nil)
+		}
+		return authorization, nil
+	}
+	authorization.IssuerPrincipal = result.Principal
+	authorization.IssuerProvider = result.Provider
+	authorization.IssuerMetadata = make(map[string]string, len(result.Metadata))
+	for key, value := range result.Metadata {
+		authorization.IssuerMetadata[key] = value
+	}
+	authorization.IssuerUserID = result.Metadata[billing.MetadataKeyUserID]
+	authorization.IssuerAPIKeyID = result.Metadata[billing.MetadataKeyAPIKeyID]
+	authorization.IssuerUnbilled = result.Metadata[billing.MetadataKeyUnbilled] == "1"
+	authorization.AllowedAuthIDs = billing.SplitCSV(result.Metadata[billing.MetadataKeyAllowedAuthIDs])
+	authorization.AllowedModels = billing.SplitCSV(result.Metadata[billing.MetadataKeyAllowedModels])
+	return authorization, nil
 }

@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 )
 
@@ -85,4 +86,34 @@ func (m *Manager) Authenticate(ctx context.Context, r *http.Request) (*Result, *
 		return nil, NewNoCredentialsError()
 	}
 	return nil, NewNoCredentialsError()
+}
+
+// Revalidate refreshes a prior authentication result through the provider that
+// issued it. handled is false when that provider does not support revalidation.
+func (m *Manager) Revalidate(ctx context.Context, previous *Result) (result *Result, handled bool, authErr *AuthError) {
+	if m == nil || previous == nil {
+		return nil, false, nil
+	}
+	providerID := strings.TrimSpace(previous.Provider)
+	if providerID == "" {
+		return nil, false, nil
+	}
+	for _, provider := range m.Providers() {
+		if provider == nil || !strings.EqualFold(strings.TrimSpace(provider.Identifier()), providerID) {
+			continue
+		}
+		revalidator, ok := provider.(Revalidator)
+		if !ok {
+			continue
+		}
+		result, authErr = revalidator.Revalidate(ctx, previous)
+		if IsAuthErrorCode(authErr, AuthErrorCodeNotHandled) {
+			continue
+		}
+		if authErr == nil && result == nil {
+			return nil, true, NewInternalAuthError("authentication revalidation returned no result", nil)
+		}
+		return result, true, authErr
+	}
+	return nil, false, nil
 }
