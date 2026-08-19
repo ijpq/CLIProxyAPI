@@ -933,16 +933,21 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 				}
 			}
 		}
-		if !authAllowedByMetadata(auth, opts.Metadata) {
+		if mismatchReason := authAccessMetadataMismatch(auth, opts.Metadata); mismatchReason != "" {
 			if selection == nil {
 				return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 			}
-			if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "auth_not_allowed"); errEnd != nil {
+			authID := strings.TrimSpace(auth.ID)
+			if authID == "" {
+				selection.End(mismatchReason)
+				return nil, &Error{Code: "auth_not_found", Message: "selected auth has no ID"}
+			}
+			homeExcludedAuthIDs[authID] = struct{}{}
+			tried[authID] = struct{}{}
+			homeSameAuthRetryPending = false
+			if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, mismatchReason); errEnd != nil {
 				return nil, errEnd
 			}
-			homeExcludedAuthIDs[auth.ID] = struct{}{}
-			tried[auth.ID] = struct{}{}
-			homeSameAuthRetryPending = false
 			homeAuthCount++
 			continue
 		}
@@ -1003,6 +1008,11 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		}
 		if errPrepare != nil {
 			if selection != nil {
+				if isHomeAuthIdentityMismatch(errPrepare) {
+					releaseAttempt()
+					selection.End("auth_mismatch")
+					return nil, wrapRequestStopError(errPrepare)
+				}
 				excludeAuth := shouldExcludeHomeAuthAfterStreamError(execCtx, auth, errPrepare)
 				if homeSameAuthRetries[auth.ID] > 0 {
 					excludeAuth = true
@@ -1074,6 +1084,10 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			if selection != nil {
 				releaseAttempt()
+				if isHomeAuthIdentityMismatch(errStream) {
+					selection.End("auth_mismatch")
+					return nil, wrapRequestStopError(errStream)
+				}
 				if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "stream_start_failed"); errEnd != nil {
 					return nil, errEnd
 				}
@@ -1366,6 +1380,49 @@ func (m *Manager) prepareHomeRequestAuth(ctx context.Context, executor ProviderE
 	return prepared, errPrepare
 }
 
+const homeAuthIdentityMismatchErrorCode = "auth_refresh_identity_mismatch"
+
+func newHomeAuthIdentityMismatchError() *Error {
+	return &Error{
+		Code:       homeAuthIdentityMismatchErrorCode,
+		Message:    "updated Home credential identity does not match the selected credential",
+		HTTPStatus: http.StatusForbidden,
+	}
+}
+
+func isHomeAuthIdentityMismatch(err error) bool {
+	var authErr *Error
+	return errors.As(err, &authErr) && authErr.Code == homeAuthIdentityMismatchErrorCode
+}
+
+// ValidateHomeAuthIdentity verifies that a Home credential update preserves the
+// selected credential identity. Empty ID, provider, and index values inherit the
+// selected values, and successful validation restores their original spelling.
+func ValidateHomeAuthIdentity(expected, updated *Auth) error {
+	if expected == nil || updated == nil {
+		return newHomeAuthIdentityMismatchError()
+	}
+	if strings.TrimSpace(updated.ID) == "" {
+		updated.ID = expected.ID
+	}
+	if strings.TrimSpace(updated.Provider) == "" {
+		updated.Provider = expected.Provider
+	}
+	if strings.TrimSpace(updated.Index) == "" {
+		updated.Index = expected.Index
+	}
+	if strings.TrimSpace(updated.ID) != strings.TrimSpace(expected.ID) ||
+		!strings.EqualFold(strings.TrimSpace(updated.Provider), strings.TrimSpace(expected.Provider)) ||
+		strings.TrimSpace(updated.Index) != strings.TrimSpace(expected.Index) ||
+		updated.AuthKind() != expected.AuthKind() {
+		return newHomeAuthIdentityMismatchError()
+	}
+	updated.ID = expected.ID
+	updated.Provider = expected.Provider
+	updated.Index = expected.Index
+	return nil
+}
+
 func (m *Manager) prepareHomeAuthSnapshot(ctx context.Context, executor ProviderExecutor, auth *Auth) (*Auth, error) {
 	if m == nil || executor == nil || auth == nil {
 		return auth, nil
@@ -1385,7 +1442,10 @@ func (m *Manager) prepareHomeAuthSnapshot(ctx context.Context, executor Provider
 			return auth, errPrepare
 		}
 		if updated == nil {
-			return target, nil
+			updated = target
+		}
+		if errIdentity := ValidateHomeAuthIdentity(auth, updated); errIdentity != nil {
+			return auth, errIdentity
 		}
 		return updated, nil
 	}
@@ -1659,6 +1719,20 @@ func authAllowedByMetadata(auth *Auth, meta map[string]any) bool {
 	}
 	_, ok := allowed[strings.TrimSpace(auth.ID)]
 	return ok
+}
+
+func authAccessMetadataMismatch(auth *Auth, meta map[string]any) string {
+	if !authAllowedByMetadata(auth, meta) {
+		return "auth_not_allowed"
+	}
+	pinnedAuthID := pinnedAuthIDFromMetadata(meta)
+	if pinnedAuthID == "" {
+		return ""
+	}
+	if auth == nil || strings.TrimSpace(auth.ID) != pinnedAuthID {
+		return "pinned_auth_mismatch"
+	}
+	return ""
 }
 
 func disallowFreeAuthFromMetadata(meta map[string]any) bool {

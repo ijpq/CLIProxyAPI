@@ -13,10 +13,31 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
+
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executionregistry"
 )
+
+func TestHandleDirectWebsocketRejectsDisallowedQueryModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewHandler(auth.NewManager(nil, nil, nil), nil)
+	router := gin.New()
+	router.GET("/v1/realtime", func(c *gin.Context) {
+		ctx := billing.WithAllowedModels(c.Request.Context(), []string{"gpt-realtime"})
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}, handler.HandleRealtimeWebsocket)
+	request := httptest.NewRequest(http.MethodGet, "/v1/realtime?model=another-live-model", nil)
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+}
 
 func TestHandleDirectWebsocketRejectsClientSecretModelMismatch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -28,6 +49,26 @@ func TestHandleDirectWebsocketRejectsClientSecretModelMismatch(t *testing.T) {
 		c.Next()
 	}, handler.HandleRealtimeWebsocket)
 	request := httptest.NewRequest(http.MethodGet, "/v1/realtime?model=another-live-model", nil)
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+}
+
+func TestHandleDirectWebsocketRejectsClientSecretRequestedModelAliasMismatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewHandler(auth.NewManager(nil, nil, nil), nil)
+	router := gin.New()
+	router.GET("/v1/realtime", func(c *gin.Context) {
+		c.Set(ClientSecretSessionContextKey, json.RawMessage(`{"type":"realtime","model":"gpt-live-1-codex"}`))
+		c.Set(ClientSecretPrincipalContextKey, "sess_123")
+		c.Set(ClientSecretRequestedModelContextKey, "gpt-realtime-2025-08-28")
+		c.Next()
+	}, handler.HandleRealtimeWebsocket)
+	request := httptest.NewRequest(http.MethodGet, "/v1/realtime?model=gpt-realtime-2025-06-03", nil)
 	request.Header.Set("Connection", "Upgrade")
 	request.Header.Set("Upgrade", "websocket")
 	recorder := httptest.NewRecorder()
@@ -212,8 +253,14 @@ func TestHandleDirectWebsocketRelaysStandardRealtimeFrames(t *testing.T) {
 	}))
 	defer upstreamServer.Close()
 
-	manager := auth.NewManager(nil, nil, nil)
+	manager := auth.NewManager(nil, &preferredAuthSelector{id: "codex-denied"}, nil)
 	manager.RegisterExecutor(&captureExecutor{})
+	registerCredential(t, manager, &auth.Auth{
+		ID:       "codex-denied",
+		Provider: "codex",
+		Status:   auth.StatusActive,
+		Metadata: map[string]any{"access_token": "denied-token"},
+	})
 	registerCredential(t, manager, &auth.Auth{
 		ID:       "codex-oauth",
 		Provider: "codex",
@@ -227,7 +274,12 @@ func TestHandleDirectWebsocketRelaysStandardRealtimeFrames(t *testing.T) {
 	handler.sidebandAPIBaseURL = "ws" + strings.TrimPrefix(upstreamServer.URL, "http") + "/v1"
 
 	router := gin.New()
-	router.GET("/v1/realtime", handler.HandleRealtimeWebsocket)
+	router.GET("/v1/realtime", func(c *gin.Context) {
+		ctx := billing.WithAllowedAuthIDs(c.Request.Context(), []string{"codex-oauth"})
+		ctx = billing.WithAllowedModels(ctx, []string{"gpt-realtime"})
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}, handler.HandleRealtimeWebsocket)
 	downstreamServer := httptest.NewServer(router)
 	defer downstreamServer.Close()
 

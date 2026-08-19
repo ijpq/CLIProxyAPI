@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,7 +106,15 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			selection.End("missing_execution_target")
 			return cliproxyexecutor.Response{}, &Error{Code: "executor_not_found", Message: "executor not registered"}
 		}
-		if _, seen := tried[auth.ID]; seen {
+		authID := strings.TrimSpace(auth.ID)
+		if authID == "" {
+			selection.End("missing_auth")
+			return cliproxyexecutor.Response{}, &Error{
+				Code:    "auth_not_found",
+				Message: "selected auth has no ID",
+			}
+		}
+		if homeAuthAlreadyTried(tried, authID) {
 			if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "repeated_auth"); errEnd != nil {
 				return cliproxyexecutor.Response{}, errEnd
 			}
@@ -114,16 +123,16 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			}
 			return cliproxyexecutor.Response{}, repeatedHomeAuthError()
 		}
-		if !authAllowedByMetadata(auth, opts.Metadata) {
-			if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "auth_not_allowed"); errEnd != nil {
+		if mismatchReason := authAccessMetadataMismatch(auth, opts.Metadata); mismatchReason != "" {
+			if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, mismatchReason); errEnd != nil {
 				return cliproxyexecutor.Response{}, errEnd
 			}
-			tried[auth.ID] = struct{}{}
+			tried[authID] = struct{}{}
 			continue
 		}
 		m.observeHomeRetryLimit(auth, selection, homeRetryLimit)
-		tried[auth.ID] = struct{}{}
-		attempted[auth.ID] = struct{}{}
+		tried[authID] = struct{}{}
+		attempted[authID] = struct{}{}
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, selection.Provider, routeModel)
 		if errRuntimeAuth := m.bindHomeSelectionRuntimeAuth(ctx, opts, selection); errRuntimeAuth != nil {
@@ -162,6 +171,11 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 		}
 		preparedAuth, errPrepare := m.prepareHomeRequestAuth(execCtx, selection.Executor, selection)
 		if errPrepare != nil {
+			if isHomeAuthIdentityMismatch(errPrepare) {
+				releaseAttempt()
+				selection.End("auth_mismatch")
+				return cliproxyexecutor.Response{}, errPrepare
+			}
 			stateModel := m.selectionModelKeyForAuth(auth, routeModel)
 			if stateModel == "" {
 				stateModel = canonicalModelKey(routeModel)
@@ -204,22 +218,36 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			var response cliproxyexecutor.Response
 			var errExecute error
 			var effectiveAuthMu sync.RWMutex
+			expectedEffectiveAuth := preparedAuth.Clone()
 			effectiveAuth := preparedAuth.Clone()
-			setEffectiveAuth := func(auth *Auth) {
-				if auth == nil || AccessTokenSHA256(auth) == "" {
+			var effectiveAuthErr error
+			setEffectiveAuth := func(observed *Auth) {
+				if observed == nil || AccessTokenSHA256(observed) == "" {
+					return
+				}
+				updated := observed.Clone()
+				if errIdentity := ValidateHomeAuthIdentity(expectedEffectiveAuth, updated); errIdentity != nil {
+					effectiveAuthMu.Lock()
+					if effectiveAuthErr == nil {
+						effectiveAuthErr = errIdentity
+					}
+					effectiveAuthMu.Unlock()
 					return
 				}
 				effectiveAuthMu.Lock()
-				effectiveAuth = auth.Clone()
+				effectiveAuth = updated
 				effectiveAuthMu.Unlock()
 			}
-			getEffectiveAuth := func() (*Auth, string) {
+			getEffectiveAuth := func() (*Auth, string, error) {
 				effectiveAuthMu.RLock()
 				defer effectiveAuthMu.RUnlock()
-				if effectiveAuth == nil {
-					return nil, ""
+				if effectiveAuthErr != nil {
+					return nil, "", effectiveAuthErr
 				}
-				return effectiveAuth.Clone(), AccessTokenSHA256(effectiveAuth)
+				if effectiveAuth == nil {
+					return nil, "", nil
+				}
+				return effectiveAuth.Clone(), AccessTokenSHA256(effectiveAuth), nil
 			}
 			executorCtx := execCtx
 			if countTokens {
@@ -236,8 +264,12 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			errExecute = markUpstreamExecutionAttemptFromContext(execCtx, errExecute)
 			durationHomeExec := time.Since(startHomeExec)
 			if countTokens {
-				if _, fingerprint := getEffectiveAuth(); isUnauthorizedError(errExecute) {
+				observedAuth, fingerprint, errObserved := getEffectiveAuth()
+				if errObserved != nil {
+					errExecute = errObserved
+				} else if isUnauthorizedError(errExecute) {
 					m.reportHomeUnauthorized(execCtx, preparedAuth, selection.Provider, resultModel, fingerprint, extractErrorBody(errExecute))
+					_ = observedAuth
 				}
 			}
 			if errExecute != nil {
@@ -245,6 +277,11 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 					upstreamErr = errExecute
 				}
 				warnLogUpstreamFailure(execCtx, entry, selection.Provider, upstreamModel, preparedAuth, durationHomeExec, errExecute)
+			}
+			if isHomeAuthIdentityMismatch(errExecute) {
+				releaseAttempt()
+				selection.End("auth_mismatch")
+				return cliproxyexecutor.Response{}, errExecute
 			}
 			result := Result{AuthID: preparedAuth.ID, Provider: selection.Provider, Model: resultModel, RouteModel: routeModel, Success: errExecute == nil, Options: execOpts}
 			if errExecute == nil {

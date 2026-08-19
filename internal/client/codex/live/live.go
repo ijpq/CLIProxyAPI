@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
@@ -31,6 +32,11 @@ const (
 	defaultLiveModel = "gpt-live-1-codex"
 	maxBodySize      = 16 << 20
 )
+
+// ClientVisibleModels returns the stable Realtime model names accepted by this handler.
+func ClientVisibleModels() []string {
+	return []string{defaultStandardRealtimeModel, recommendedStandardRealtimeModel, defaultLiveModel}
+}
 
 var liveProtocolHeaders = []string{
 	"OpenAI-Alpha",
@@ -194,9 +200,17 @@ func (h *Handler) Handle(c *gin.Context) {
 		writeLiveError(c, status, errRead.Error())
 		return
 	}
-	upstreamBody, upstreamContentType, model, errPayload := prepareCallRequest(body, c.GetHeader("Content-Type"))
+	upstreamBody, upstreamContentType, model, errPayload := prepareCallRequest(body, c.GetHeader("Content-Type"), defaultCallRequestModel(c.Request.URL.Path))
+	requestedModel := model
+	if clientSecretModel := clientSecretRequestedModel(c); clientSecretModel != "" {
+		requestedModel = clientSecretModel
+	}
 	if errPayload == nil {
 		upstreamBody, upstreamContentType, model, errPayload = applyClientSecretCallSession(upstreamBody, upstreamContentType, model, clientSecretSession(c))
+	}
+	if errPayload == nil && !billing.ModelAllowed(c.Request.Context(), requestedModel) {
+		writeLiveError(c, http.StatusForbidden, "Model not allowed for this account")
+		return
 	}
 	if errPayload == nil {
 		upstreamBody, model, errPayload = rewriteCallRequestModel(upstreamBody, upstreamContentType, model)
@@ -217,6 +231,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	selectionOpts := coreexecutor.Options{
 		Headers:         liveSelectionHeaders(c),
 		OriginalRequest: body,
+		Metadata:        billing.ExecutionAccessMetadata(ctx, nil, requestedModel),
 	}
 	selection, selected, errSelect := h.selectOAuth(ctx, model, selectionOpts)
 	if errSelect != nil {
@@ -321,6 +336,7 @@ func (h *Handler) Handle(c *gin.Context) {
 		writeLiveError(c, clienterror.HTTPStatusFromErrorOr(errRequest, http.StatusBadGateway), errRequest.Error())
 		return
 	}
+
 	var closeResponseOnce sync.Once
 	var closeResponseErr error
 	closeResponseBody := func() error {
@@ -401,7 +417,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	sessionStored := false
 	if success && h.sessions != nil {
 		if callID != "" {
-			session := liveSession{authID: selected.ID, model: model, media: mediaSession}
+			session := liveSession{authID: selected.ID, model: model, requestedModel: requestedModel, media: mediaSession}
 			session.ownerPrincipal, session.ownerProvider = requestOwner(c)
 			if principal, ok := c.Get(ClientSecretPrincipalContextKey); ok {
 				session.clientSecretPrincipal, _ = principal.(string)
@@ -512,14 +528,25 @@ func readLimitedBody(body io.Reader) ([]byte, error) {
 	return payload, nil
 }
 
-func prepareCallRequest(body []byte, contentType string) ([]byte, string, string, error) {
+func defaultCallRequestModel(path string) string {
+	if strings.HasPrefix(strings.TrimSpace(path), "/v1/realtime") {
+		return defaultStandardRealtimeModel
+	}
+	return defaultLiveModel
+}
+
+func prepareCallRequest(body []byte, contentType, defaultModel string) ([]byte, string, string, error) {
+	defaultModel = strings.TrimSpace(defaultModel)
+	if defaultModel == "" {
+		defaultModel = defaultLiveModel
+	}
 	mediaType, params, errMediaType := mime.ParseMediaType(contentType)
 	if errMediaType == nil && strings.EqualFold(mediaType, "multipart/form-data") {
-		return multipartCallRequest(body, strings.TrimSpace(params["boundary"]))
+		return multipartCallRequest(body, strings.TrimSpace(params["boundary"]), defaultModel)
 	}
 	model := modelFromJSON(body)
 	if model == "" {
-		model = defaultLiveModel
+		model = defaultModel
 	}
 	if strings.TrimSpace(contentType) == "" {
 		contentType = "application/json"
@@ -599,7 +626,7 @@ func rewriteCallRequestModel(body []byte, contentType, model string) ([]byte, st
 	return encoded, upstreamModel, nil
 }
 
-func multipartCallRequest(body []byte, boundary string) ([]byte, string, string, error) {
+func multipartCallRequest(body []byte, boundary, defaultModel string) ([]byte, string, string, error) {
 	if boundary == "" {
 		return nil, "", "", errors.New("Codex live multipart boundary is missing")
 	}
@@ -641,7 +668,10 @@ func multipartCallRequest(body []byte, boundary string) ([]byte, string, string,
 		return nil, "", "", errors.New("Codex live multipart body requires an sdp field")
 	}
 	if model == "" {
-		model = defaultLiveModel
+		model = strings.TrimSpace(defaultModel)
+		if model == "" {
+			model = defaultLiveModel
+		}
 	}
 
 	encoded, errEncode := encodeCallRequest(*sdp, session)

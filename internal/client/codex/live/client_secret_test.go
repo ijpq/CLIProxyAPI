@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
@@ -23,6 +24,13 @@ func TestCreateClientSecretMapsStandardRealtimeModel(t *testing.T) {
 	router.POST("/v1/realtime/client_secrets", func(c *gin.Context) {
 		c.Set("userApiKey", "issuer-key")
 		c.Set("accessProvider", "static")
+		c.Set("accessMetadata", map[string]string{"tenant": "tenant-1"})
+		ctx := billing.WithUserID(c.Request.Context(), "user-1")
+		ctx = billing.WithAPIKeyID(ctx, "key-1")
+		ctx = billing.WithUnbilled(ctx)
+		ctx = billing.WithAllowedAuthIDs(ctx, []string{"codex-oauth"})
+		ctx = billing.WithAllowedModels(ctx, []string{"gpt-realtime"})
+		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}, handler.CreateClientSecret)
 
@@ -76,6 +84,21 @@ func TestCreateClientSecretMapsStandardRealtimeModel(t *testing.T) {
 	if authorization.IssuerPrincipal != "issuer-key" || authorization.IssuerProvider != "static" {
 		t.Fatalf("issuer = %q/%q", authorization.IssuerProvider, authorization.IssuerPrincipal)
 	}
+	if authorization.IssuerMetadata["tenant"] != "tenant-1" {
+		t.Fatalf("issuer metadata = %#v", authorization.IssuerMetadata)
+	}
+	if authorization.IssuerUserID != "user-1" || authorization.IssuerAPIKeyID != "key-1" || !authorization.IssuerUnbilled {
+		t.Fatalf("issuer billing state = %+v", authorization)
+	}
+	if len(authorization.AllowedAuthIDs) != 1 || authorization.AllowedAuthIDs[0] != "codex-oauth" {
+		t.Fatalf("allowed auth IDs = %#v", authorization.AllowedAuthIDs)
+	}
+	if len(authorization.AllowedModels) != 1 || authorization.AllowedModels[0] != "gpt-realtime" {
+		t.Fatalf("allowed models = %#v", authorization.AllowedModels)
+	}
+	if authorization.RequestedModel != "gpt-realtime" {
+		t.Fatalf("requested model = %q", authorization.RequestedModel)
+	}
 	if got := modelFromJSON(authorization.Session); got != defaultLiveModel {
 		t.Fatalf("upstream session model = %q, want %q", got, defaultLiveModel)
 	}
@@ -119,7 +142,10 @@ func TestClientSecretStoreRejectsExpiredToken(t *testing.T) {
 	store := newClientSecretStore()
 	now := time.Unix(1700000000, 0)
 	store.now = func() time.Time { return now }
-	token, _, _, errCreate := store.create(json.RawMessage(`{"type":"realtime","model":"gpt-live-1-codex"}`), time.Minute, "issuer", "test")
+	token, _, _, errCreate := store.create(json.RawMessage(`{"type":"realtime","model":"gpt-live-1-codex"}`), time.Minute, ClientSecretAuthorization{
+		IssuerPrincipal: "issuer",
+		IssuerProvider:  "test",
+	})
 	if errCreate != nil {
 		t.Fatalf("create() error = %v", errCreate)
 	}
@@ -129,6 +155,44 @@ func TestClientSecretStoreRejectsExpiredToken(t *testing.T) {
 	now = now.Add(time.Minute)
 	if _, errAuthenticate := store.authenticate(token); errAuthenticate == nil {
 		t.Fatal("authenticate() accepted expired token")
+	}
+}
+
+func TestClientSecretStoreCopiesAuthorizationState(t *testing.T) {
+	store := newClientSecretStore()
+	seed := ClientSecretAuthorization{
+		IssuerMetadata: map[string]string{"tenant": "tenant-a"},
+		AllowedAuthIDs: []string{"auth-a"},
+		AllowedModels:  []string{"model-a"},
+	}
+	token, created, _, errCreate := store.create(json.RawMessage(`{"type":"realtime","model":"model-a"}`), time.Minute, seed)
+	if errCreate != nil {
+		t.Fatalf("create() error = %v", errCreate)
+	}
+	seed.IssuerMetadata["tenant"] = "mutated-seed"
+	seed.AllowedAuthIDs[0] = "mutated-seed"
+	seed.AllowedModels[0] = "mutated-seed"
+	created.IssuerMetadata["tenant"] = "mutated-result"
+	created.AllowedAuthIDs[0] = "mutated-result"
+	created.AllowedModels[0] = "mutated-result"
+	created.Session[0] = 'x'
+
+	authenticated, errAuthenticate := store.authenticate(token)
+	if errAuthenticate != nil {
+		t.Fatalf("authenticate() error = %v", errAuthenticate)
+	}
+	if authenticated.IssuerMetadata["tenant"] != "tenant-a" || authenticated.AllowedAuthIDs[0] != "auth-a" || authenticated.AllowedModels[0] != "model-a" || modelFromJSON(authenticated.Session) != "model-a" {
+		t.Fatalf("stored authorization was mutated: %+v", authenticated)
+	}
+	authenticated.IssuerMetadata["tenant"] = "mutated-authenticate"
+	authenticated.AllowedAuthIDs[0] = "mutated-authenticate"
+	authenticated.Session[0] = 'x'
+	again, errAuthenticate := store.authenticate(token)
+	if errAuthenticate != nil {
+		t.Fatalf("authenticate() second error = %v", errAuthenticate)
+	}
+	if again.IssuerMetadata["tenant"] != "tenant-a" || again.AllowedAuthIDs[0] != "auth-a" || modelFromJSON(again.Session) != "model-a" {
+		t.Fatalf("authenticate() returned shared state: %+v", again)
 	}
 }
 
@@ -142,6 +206,15 @@ func TestNormalizeClientSecretSessionHandlesWhitespaceNullAndRejectsArrays(t *te
 	}
 	if _, _, errNormalize = normalizeClientSecretSession(json.RawMessage(`[]`)); errNormalize == nil {
 		t.Fatal("normalize accepted an array session")
+	}
+}
+
+func TestCodexRealtimeModelStripsThinkingSuffix(t *testing.T) {
+	if got := codexRealtimeModel("gpt-realtime(high)"); got != defaultLiveModel {
+		t.Fatalf("codexRealtimeModel() = %q, want %q", got, defaultLiveModel)
+	}
+	if got := realtimeBaseModel("custom-realtime-model(1024)"); got != "custom-realtime-model" {
+		t.Fatalf("realtimeBaseModel() = %q, want custom-realtime-model", got)
 	}
 }
 
@@ -169,6 +242,24 @@ func TestCreateClientSecretRejectsUnsupportedSessionType(t *testing.T) {
 	}
 }
 
+func TestCreateClientSecretRejectsDisallowedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{clientSecrets: newClientSecretStore()}
+	router := gin.New()
+	router.POST("/v1/realtime/client_secrets", func(c *gin.Context) {
+		ctx := billing.WithAllowedModels(c.Request.Context(), []string{"gpt-realtime"})
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}, handler.CreateClientSecret)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/realtime/client_secrets", strings.NewReader(`{"session":{"type":"realtime","model":"another-live-model"}}`))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+}
+
 func TestLiveSelectionHeadersRemoveLocalClientSecret(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ginContext, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -182,6 +273,50 @@ func TestLiveSelectionHeadersRemoveLocalClientSecret(t *testing.T) {
 	}
 	if headers.Get("OpenAI-Safety-Identifier") != "safe-user" {
 		t.Fatalf("safety identifier = %q", headers.Get("OpenAI-Safety-Identifier"))
+	}
+}
+
+func TestCloseRevokedClientSecretSessionReleasesOwnedCall(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		name   string
+		target string
+		param  string
+	}{
+		{name: "sideband_query", target: "/v1/realtime?call_id=call-123"},
+		{name: "hangup_param", target: "/v1/realtime/calls/call-123/hangup", param: "call-123"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler := NewHandler(auth.NewManager(nil, nil, nil), nil)
+			resources := &liveSessionResources{}
+			closed := false
+			resources.add(func() error {
+				closed = true
+				return nil
+			})
+			handler.sessions.put("call-123", liveSession{
+				clientSecretPrincipal: "sess_expected",
+				resources:             resources,
+			})
+
+			ginContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ginContext.Request = httptest.NewRequest(http.MethodPost, test.target, nil)
+			if test.param != "" {
+				ginContext.Params = gin.Params{{Key: "call_id", Value: test.param}}
+			}
+			if handler.CloseRevokedClientSecretSession(ginContext, ClientSecretAuthorization{Principal: "sess_other"}) {
+				t.Fatal("mismatched client secret closed the call")
+			}
+			if _, exists := handler.sessions.peek("call-123"); !exists || closed {
+				t.Fatal("mismatched client secret changed the retained call")
+			}
+			if !handler.CloseRevokedClientSecretSession(ginContext, ClientSecretAuthorization{Principal: "sess_expected"}) {
+				t.Fatal("owned revoked client secret did not close the call")
+			}
+			if _, exists := handler.sessions.peek("call-123"); exists || !closed {
+				t.Fatal("revoked client secret did not release retained call resources")
+			}
+		})
 	}
 }
 

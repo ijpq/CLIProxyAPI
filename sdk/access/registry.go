@@ -13,6 +13,12 @@ type Provider interface {
 	Authenticate(ctx context.Context, r *http.Request) (*Result, *AuthError)
 }
 
+// Revalidator optionally refreshes the current authorization state for a
+// previously authenticated principal without requiring the original secret.
+type Revalidator interface {
+	Revalidate(ctx context.Context, previous *Result) (*Result, *AuthError)
+}
+
 // Result conveys authentication outcome.
 type Result struct {
 	Provider  string

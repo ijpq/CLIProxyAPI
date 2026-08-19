@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
@@ -58,8 +59,14 @@ func (h *Handler) HandleHangup(c *gin.Context) {
 		writeRealtimeError(c, http.StatusForbidden, "Realtime call belongs to another API principal", "invalid_request_error", "realtime_call_scope_mismatch")
 		return
 	}
+	requestCtx := c.Request.Context()
+	if !billing.ModelAllowed(requestCtx, session.requestedModel) || !billing.AuthAllowed(requestCtx, session.authID) {
+		h.sessions.complete(session, "access_denied")
+		writeRealtimeError(c, http.StatusForbidden, "Realtime call is not allowed for this account", "invalid_request_error", "realtime_call_access_denied")
+		return
+	}
 
-	ctx := context.WithValue(c.Request.Context(), "gin", c)
+	ctx := context.WithValue(requestCtx, "gin", c)
 	var activeSelection *auth.HomeDispatchSelection
 	var temporarySelection bool
 	var selected *auth.Auth
@@ -69,10 +76,10 @@ func (h *Handler) HandleHangup(c *gin.Context) {
 	} else {
 		selectionOpts := coreexecutor.Options{
 			Headers: liveSelectionHeaders(c),
-			Metadata: map[string]any{
+			Metadata: billing.ExecutionAccessMetadata(ctx, map[string]any{
 				coreexecutor.PinnedAuthMetadataKey:       session.authID,
 				coreexecutor.ExecutionSessionMetadataKey: callID,
-			},
+			}, session.requestedModel),
 		}
 		selection, selectedAuth, errSelect := h.selectOAuth(ctx, session.model, selectionOpts)
 		if errSelect != nil {
@@ -82,6 +89,22 @@ func (h *Handler) HandleHangup(c *gin.Context) {
 		activeSelection = selection
 		selected = selectedAuth
 		temporarySelection = selection != nil
+	}
+	if selected == nil {
+		if activeSelection != nil {
+			activeSelection.End("missing_auth")
+		}
+		h.sessions.complete(session, "auth_unavailable")
+		writeRealtimeError(c, http.StatusServiceUnavailable, "Codex auth unavailable", "server_error", "codex_auth_unavailable")
+		return
+	}
+	if !liveSessionAuthAllowed(ctx, session, selected) {
+		if activeSelection != nil {
+			activeSelection.End("auth_mismatch")
+		}
+		h.sessions.complete(session, "access_denied")
+		writeRealtimeError(c, http.StatusForbidden, "Codex credential is not valid for this Realtime call", "invalid_request_error", "realtime_call_access_denied")
+		return
 	}
 	var selectionRelease func()
 	if activeSelection != nil {
@@ -104,10 +127,6 @@ func (h *Handler) HandleHangup(c *gin.Context) {
 			activeSelection.End("request_closed")
 		}
 	}()
-	if selected == nil {
-		writeRealtimeError(c, http.StatusServiceUnavailable, "Codex auth unavailable", "server_error", "codex_auth_unavailable")
-		return
-	}
 	logging.SetGinCPATraceID(c, selected.EnsureIndex())
 
 	body, errRead := readBody(c.Request.Body)

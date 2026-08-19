@@ -1,6 +1,7 @@
 package live
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,9 +9,11 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executionregistry"
+	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
 func TestHandleHangupForwardsPinnedOAuthCall(t *testing.T) {
@@ -133,6 +136,49 @@ func TestHandleHangupReportsUnauthorizedWhenResponseReadFails(t *testing.T) {
 	}
 }
 
+func TestHandleHangupRejectsRetainedHomeAuthIdentityMismatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	manager := auth.NewManager(nil, nil, nil)
+	manager.SetConfig(&config.Config{Home: config.HomeConfig{Enabled: true}})
+	registry := executionregistry.New()
+	manager.PublishHomeDispatch(&homeDispatcher{}, registry, 1)
+	executor := &captureExecutor{}
+	manager.RegisterExecutor(executor)
+	selection, errSelect := manager.SelectHomeAuthByKind(context.Background(), "codex", defaultLiveModel, auth.AuthKindOAuth, coreexecutor.Options{})
+	if errSelect != nil {
+		t.Fatalf("SelectHomeAuthByKind() error = %v", errSelect)
+	}
+	selection.Retain()
+
+	handler := NewHandler(manager, nil)
+	handler.sessions.put("call-stale-auth", liveSession{
+		authID:        "expected-home-auth",
+		model:         defaultLiveModel,
+		homeSelection: selection,
+	})
+	router := gin.New()
+	router.POST("/v1/realtime/calls/:call_id/hangup", handler.HandleHangup)
+	request := httptest.NewRequest(http.MethodPost, "/v1/realtime/calls/call-stale-auth/hangup", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if executor.httpCalls.Load() != 0 {
+		t.Fatalf("HTTP calls = %d, want 0", executor.httpCalls.Load())
+	}
+	if _, ok := handler.sessions.peek("call-stale-auth"); ok {
+		t.Fatal("auth-mismatched hangup retained session")
+	}
+	if selection.Active() {
+		t.Fatal("auth-mismatched hangup retained Home selection")
+	}
+	if errDrain := registry.Drain(context.Background()); errDrain != nil {
+		t.Fatalf("Drain() error = %v", errDrain)
+	}
+}
+
 func TestHandleHangupRejectsDifferentAPIPrincipal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := NewHandler(auth.NewManager(nil, nil, nil), nil)
@@ -153,6 +199,36 @@ func TestHandleHangupRejectsDifferentAPIPrincipal(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+}
+
+func TestHandleHangupRejectsDisallowedStoredAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewHandler(auth.NewManager(nil, nil, nil), nil)
+	handler.sessions.put("call-123", liveSession{
+		authID:         "codex-denied",
+		model:          defaultLiveModel,
+		requestedModel: "gpt-realtime",
+		ownerPrincipal: "owner-key",
+		ownerProvider:  "static",
+	})
+	router := gin.New()
+	router.POST("/v1/realtime/calls/:call_id/hangup", func(c *gin.Context) {
+		c.Set("userApiKey", "owner-key")
+		c.Set("accessProvider", "static")
+		ctx := billing.WithAllowedAuthIDs(c.Request.Context(), []string{"codex-allowed"})
+		ctx = billing.WithAllowedModels(ctx, []string{"gpt-realtime"})
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}, handler.HandleHangup)
+	request := httptest.NewRequest(http.MethodPost, "/v1/realtime/calls/call-123/hangup", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if _, ok := handler.sessions.peek("call-123"); ok {
+		t.Fatal("access-denied hangup retained session")
 	}
 }
 

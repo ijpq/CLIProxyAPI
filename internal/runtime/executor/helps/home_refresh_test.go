@@ -300,6 +300,65 @@ func TestAuthAccessTokenSHA256SupportsKnownMetadataShapes(t *testing.T) {
 	}
 }
 
+func TestRefreshAuthViaHomeRejectsChangedCredentialIdentity(t *testing.T) {
+	raw, errMarshal := json.Marshal(cliproxyauth.Auth{
+		ID:       "home-auth-other",
+		Provider: "antigravity",
+		Metadata: map[string]any{"access_token": "new-access-token"},
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal Home auth: %v", errMarshal)
+	}
+	client := &fakeHomeRefreshClient{raw: raw}
+	oldCurrentHomeRefreshClient := currentHomeRefreshClient
+	currentHomeRefreshClient = func() homeRefreshClient { return client }
+	t.Cleanup(func() { currentHomeRefreshClient = oldCurrentHomeRefreshClient })
+
+	cfg := &config.Config{Home: config.HomeConfig{Enabled: true}}
+	auth := &cliproxyauth.Auth{
+		ID:       "home-auth-1",
+		Provider: "antigravity",
+		Index:    "home-index-1",
+		Metadata: map[string]any{"access_token": "old-access-token"},
+	}
+	updated, handled, errRefresh := RefreshAuthViaHome(context.Background(), cfg, auth)
+	var authErr *cliproxyauth.Error
+	if updated != nil || !handled || !errors.As(errRefresh, &authErr) || authErr.Code != "auth_refresh_identity_mismatch" || authErr.HTTPStatus != http.StatusForbidden {
+		t.Fatalf("RefreshAuthViaHome() = %#v, %v, %#v; want nil, true, identity mismatch HTTP 403", updated, handled, errRefresh)
+	}
+}
+
+func TestRefreshAuthViaHomeRejectsChangedAuthIndex(t *testing.T) {
+	raw, errMarshal := json.Marshal(homeRefreshAuthEnvelope{
+		Auth: cliproxyauth.Auth{
+			ID:       "home-auth-1",
+			Provider: "antigravity",
+			Metadata: map[string]any{"access_token": "new-access-token"},
+		},
+		AuthIndex: "home-index-2",
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal Home auth envelope: %v", errMarshal)
+	}
+	client := &fakeHomeRefreshClient{raw: raw}
+	oldCurrentHomeRefreshClient := currentHomeRefreshClient
+	currentHomeRefreshClient = func() homeRefreshClient { return client }
+	t.Cleanup(func() { currentHomeRefreshClient = oldCurrentHomeRefreshClient })
+
+	cfg := &config.Config{Home: config.HomeConfig{Enabled: true}}
+	auth := &cliproxyauth.Auth{
+		ID:       "home-auth-1",
+		Provider: "antigravity",
+		Index:    "home-index-1",
+		Metadata: map[string]any{"access_token": "old-access-token"},
+	}
+	updated, handled, errRefresh := RefreshAuthViaHome(context.Background(), cfg, auth)
+	var authErr *cliproxyauth.Error
+	if updated != nil || !handled || !errors.As(errRefresh, &authErr) || authErr.Code != "auth_refresh_identity_mismatch" || authErr.HTTPStatus != http.StatusForbidden {
+		t.Fatalf("RefreshAuthViaHome() = %#v, %v, %#v; want nil, true, index mismatch HTTP 403", updated, handled, errRefresh)
+	}
+}
+
 func TestRefreshAuthViaHomeAcceptsAuthEnvelope(t *testing.T) {
 	raw, errMarshal := json.Marshal(struct {
 		Auth      cliproxyauth.Auth `json:"auth"`

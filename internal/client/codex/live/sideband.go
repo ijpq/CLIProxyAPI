@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
@@ -45,6 +46,7 @@ type liveSession struct {
 	callID                string
 	authID                string
 	model                 string
+	requestedModel        string
 	ownerPrincipal        string
 	ownerProvider         string
 	clientSecretPrincipal string
@@ -52,6 +54,15 @@ type liveSession struct {
 	media                 mediaRelaySession
 	resources             *liveSessionResources
 	token                 uint64
+}
+
+func liveSessionAuthAllowed(ctx context.Context, session liveSession, selected *auth.Auth) bool {
+	if selected == nil {
+		return false
+	}
+	expectedAuthID := strings.TrimSpace(session.authID)
+	selectedAuthID := strings.TrimSpace(selected.ID)
+	return expectedAuthID != "" && selectedAuthID == expectedAuthID && billing.AuthAllowed(ctx, selectedAuthID)
 }
 
 type liveSessionResources struct {
@@ -236,6 +247,28 @@ func (s *sessionStore) peek(callID string) (liveSession, bool) {
 	return entry.session, true
 }
 
+// CloseRevokedClientSecretSession releases a retained call owned by a revoked
+// local client secret without forwarding another request upstream.
+func (h *Handler) CloseRevokedClientSecretSession(c *gin.Context, authorization ClientSecretAuthorization) bool {
+	if h == nil || h.sessions == nil || c == nil {
+		return false
+	}
+	principal := strings.TrimSpace(authorization.Principal)
+	if principal == "" {
+		return false
+	}
+	_, callID, ok := sidebandTarget(c)
+	if !ok {
+		return false
+	}
+	session, exists := h.sessions.peek(callID)
+	if !exists || strings.TrimSpace(session.clientSecretPrincipal) == "" || session.clientSecretPrincipal != principal {
+		return false
+	}
+	h.sessions.complete(session, "client_secret_revoked")
+	return true
+}
+
 func endLiveSession(session liveSession, reason string) {
 	if session.resources != nil {
 		session.resources.close()
@@ -343,6 +376,12 @@ func (h *Handler) HandleSideband(c *gin.Context) {
 		writeRealtimeError(c, http.StatusForbidden, "Realtime call belongs to another API principal", "invalid_request_error", "realtime_call_scope_mismatch")
 		return
 	}
+	requestCtx := c.Request.Context()
+	if !billing.ModelAllowed(requestCtx, session.requestedModel) || !billing.AuthAllowed(requestCtx, session.authID) {
+		h.sessions.complete(session, "access_denied")
+		writeRealtimeError(c, http.StatusForbidden, "Realtime call is not allowed for this account", "invalid_request_error", "realtime_call_access_denied")
+		return
+	}
 	consumeSession := false
 	defer func() {
 		if consumeSession {
@@ -368,10 +407,10 @@ func (h *Handler) HandleSideband(c *gin.Context) {
 	} else {
 		selectionOpts := coreexecutor.Options{
 			Headers: liveSelectionHeaders(c),
-			Metadata: map[string]any{
+			Metadata: billing.ExecutionAccessMetadata(ctx, map[string]any{
 				coreexecutor.PinnedAuthMetadataKey:       session.authID,
 				coreexecutor.ExecutionSessionMetadataKey: callID,
-			},
+			}, session.requestedModel),
 		}
 		selection, selected, errSelect = h.selectOAuth(ctx, session.model, selectionOpts)
 	}
@@ -380,7 +419,19 @@ func (h *Handler) HandleSideband(c *gin.Context) {
 		return
 	}
 	if selected == nil {
+		if selection != nil {
+			selection.End("missing_auth")
+		}
+		consumeSession = true
 		writeLiveError(c, http.StatusServiceUnavailable, "Codex auth unavailable")
+		return
+	}
+	if !liveSessionAuthAllowed(ctx, session, selected) {
+		if selection != nil {
+			selection.End("auth_mismatch")
+		}
+		consumeSession = true
+		writeRealtimeError(c, http.StatusForbidden, "Codex credential is not valid for this Realtime call", "invalid_request_error", "realtime_call_access_denied")
 		return
 	}
 
@@ -425,6 +476,7 @@ func (h *Handler) HandleSideband(c *gin.Context) {
 	}
 
 	upstream, handshakeResponse, errDial := dialUpstream(selected)
+
 	if errDial != nil {
 		handshakeStatus := clienterror.HTTPStatusFromErrorOr(errDial, http.StatusBadGateway)
 		if handshakeResponse != nil && handshakeResponse.StatusCode > 0 {

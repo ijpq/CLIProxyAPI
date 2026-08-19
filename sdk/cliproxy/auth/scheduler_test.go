@@ -1295,6 +1295,66 @@ func TestSelectHomeAuthByKindSkipsProviderMismatch(t *testing.T) {
 	selection.End("test_complete")
 }
 
+func TestSelectHomeAuthByKindEnforcesPinnedAuthID(t *testing.T) {
+	dispatcher := &authKindHomeDispatcher{auths: []Auth{
+		{ID: "home-other", Provider: "test", Metadata: map[string]any{"access_token": "other-token"}},
+		{ID: "home-pinned", Provider: "test", Metadata: map[string]any{"access_token": "pinned-token"}},
+	}}
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(&internalconfig.Config{Home: internalconfig.HomeConfig{Enabled: true}})
+	registry := executionregistry.New()
+	manager.PublishHomeDispatch(dispatcher, registry, 1)
+	manager.RegisterExecutor(schedulerTestExecutor{})
+	opts := cliproxyexecutor.Options{Metadata: map[string]any{
+		cliproxyexecutor.PinnedAuthMetadataKey: "home-pinned",
+	}}
+
+	selection, errSelect := manager.SelectHomeAuthByKind(context.Background(), "test", "gpt-5.4", AuthKindOAuth, opts)
+	if errSelect != nil {
+		t.Fatalf("SelectHomeAuthByKind() error = %v", errSelect)
+	}
+	if selection == nil || selection.Auth == nil || selection.Auth.ID != "home-pinned" {
+		t.Fatalf("SelectHomeAuthByKind() = %#v, want home-pinned", selection)
+	}
+	if got := dispatcher.counts; len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("home auth counts = %v, want [1 2]", got)
+	}
+	selection.End("test_complete")
+	if errDrain := registry.Drain(context.Background()); errDrain != nil {
+		t.Fatalf("Drain() error = %v", errDrain)
+	}
+}
+
+func TestSelectHomeAuthByKindFailsClosedOnRepeatedPinnedMismatch(t *testing.T) {
+	dispatcher := &authKindHomeDispatcher{auths: []Auth{
+		{ID: "home-other", Provider: "test", Metadata: map[string]any{"access_token": "other-token"}},
+		{ID: "home-other", Provider: "test", Metadata: map[string]any{"access_token": "other-token"}},
+	}}
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(&internalconfig.Config{Home: internalconfig.HomeConfig{Enabled: true}})
+	registry := executionregistry.New()
+	manager.PublishHomeDispatch(dispatcher, registry, 1)
+	manager.RegisterExecutor(schedulerTestExecutor{})
+	opts := cliproxyexecutor.Options{Metadata: map[string]any{
+		cliproxyexecutor.PinnedAuthMetadataKey: "home-pinned",
+	}}
+
+	selection, errSelect := manager.SelectHomeAuthByKind(context.Background(), "test", "gpt-5.4", AuthKindOAuth, opts)
+	if selection != nil {
+		t.Fatalf("SelectHomeAuthByKind() selection = %#v, want nil", selection)
+	}
+	var authErr *Error
+	if !errors.As(errSelect, &authErr) || authErr.Code != "auth_not_found" {
+		t.Fatalf("SelectHomeAuthByKind() error = %#v, want auth_not_found", errSelect)
+	}
+	if got := dispatcher.counts; len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("home auth counts = %v, want [1 2]", got)
+	}
+	if errDrain := registry.Drain(context.Background()); errDrain != nil {
+		t.Fatalf("Drain() error = %v", errDrain)
+	}
+}
+
 func TestSelectHomeAuthWithCredentialPolicyTransportsAndValidatesPolicy(t *testing.T) {
 	dispatcher := &authKindHomeDispatcher{auths: []Auth{
 		{ID: "ordinary-api-key", Provider: "codex", Attributes: map[string]string{AttributeAPIKey: "ordinary", "base_url": "https://ordinary.example.com"}},

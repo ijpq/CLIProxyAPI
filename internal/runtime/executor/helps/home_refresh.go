@@ -163,8 +163,15 @@ func RefreshAuthViaHome(ctx context.Context, cfg *config.Config, auth *cliproxya
 	if updated.Disabled || updated.Status == cliproxyauth.StatusDisabled {
 		return nil, true, homeStatusErr{code: http.StatusUnauthorized, msg: "credential unauthorized"}
 	}
+	if errIdentity := cliproxyauth.ValidateHomeAuthIdentity(auth, updated); errIdentity != nil {
+		return nil, true, errIdentity
+	}
 	if returnedIndex != "" {
-		authIndex = returnedIndex
+		returned := updated.Clone()
+		returned.Index = returnedIndex
+		if errIdentity := cliproxyauth.ValidateHomeAuthIdentity(auth, returned); errIdentity != nil {
+			return nil, true, errIdentity
+		}
 	}
 	updated.Index = authIndex
 	updated.EnsureIndex()

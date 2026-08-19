@@ -88,6 +88,32 @@ func TestShouldEnableExampleAPIKeySafeMode(t *testing.T) {
 	}
 }
 
+func TestBillingModelCatalogPreservesEmptyCatalogFallback(t *testing.T) {
+	for _, entries := range [][]map[string]any{nil, {{"id": " "}}} {
+		if models := billingModelCatalog(entries); len(models) != 0 {
+			t.Fatalf("billingModelCatalog(%v) = %v, want empty catalog", entries, models)
+		}
+	}
+}
+
+func TestBillingModelCatalogIncludesRealtimeAliases(t *testing.T) {
+	models := billingModelCatalog([]map[string]any{
+		{"id": "registry-model"},
+		{"id": " GPT-REALTIME "},
+		{"id": "gpt-realtime"},
+		{"id": ""},
+	})
+	want := []string{"registry-model", "GPT-REALTIME", "gpt-realtime-2.1", "gpt-live-1-codex"}
+	if len(models) != len(want) {
+		t.Fatalf("billingModelCatalog() = %v, want %v", models, want)
+	}
+	for index := range want {
+		if models[index] != want[index] {
+			t.Fatalf("billingModelCatalog() = %v, want %v", models, want)
+		}
+	}
+}
+
 func TestModelCatalogUpdaterPlan(t *testing.T) {
 	tests := []struct {
 		name            string

@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
@@ -17,7 +18,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const defaultStandardRealtimeModel = "gpt-realtime"
+const (
+	defaultStandardRealtimeModel     = "gpt-realtime"
+	recommendedStandardRealtimeModel = "gpt-realtime-2.1"
+)
 
 // HandleRealtimeWebsocket dispatches a standard Realtime WebSocket or an existing call sideband.
 func (h *Handler) HandleRealtimeWebsocket(c *gin.Context) {
@@ -44,18 +48,30 @@ func (h *Handler) HandleDirectWebsocket(c *gin.Context) {
 	if requestedModel == "" {
 		requestedModel = defaultStandardRealtimeModel
 	}
+	if !billing.ModelAllowed(c.Request.Context(), requestedModel) {
+		writeRealtimeError(c, http.StatusForbidden, "Model not allowed for this account", "invalid_request_error", "model_not_allowed")
+		return
+	}
 	selectionModel := codexRealtimeModel(requestedModel)
 	tokenSession := clientSecretSession(c)
 	if len(tokenSession) > 0 {
-		tokenModel := codexRealtimeModel(modelFromJSON(tokenSession))
-		if selectionModel != tokenModel {
+		tokenModel := clientSecretRequestedModel(c)
+		if tokenModel != "" {
+			if !strings.EqualFold(requestedModel, tokenModel) {
+				writeRealtimeError(c, http.StatusForbidden, "Realtime client secret is not valid for the requested model", "invalid_request_error", "realtime_client_secret_scope_mismatch")
+				return
+			}
+		} else if selectionModel != codexRealtimeModel(modelFromJSON(tokenSession)) {
 			writeRealtimeError(c, http.StatusForbidden, "Realtime client secret is not valid for the requested model", "invalid_request_error", "realtime_client_secret_scope_mismatch")
 			return
 		}
 	}
 	ctx := context.WithValue(c.Request.Context(), "gin", c)
 	ctx = coreexecutor.WithDownstreamWebsocket(ctx)
-	selectionOpts := coreexecutor.Options{Headers: liveSelectionHeaders(c)}
+	selectionOpts := coreexecutor.Options{
+		Headers:  liveSelectionHeaders(c),
+		Metadata: billing.ExecutionAccessMetadata(ctx, nil, requestedModel),
+	}
 	selection, selected, errSelect := h.selectOAuth(ctx, selectionModel, selectionOpts)
 	if errSelect != nil {
 		writeSelectionError(c, errSelect)
@@ -82,7 +98,7 @@ func (h *Handler) HandleDirectWebsocket(c *gin.Context) {
 	}
 	logging.SetGinCPATraceID(c, selected.EnsureIndex())
 
-	upstreamURL := h.directRealtimeURL(requestedModel)
+	upstreamURL := h.directRealtimeURL(realtimeBaseModel(requestedModel))
 	dialUpstream := func(current *auth.Auth) (*websocket.Conn, *http.Response, error) {
 		request, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, websocketHTTPURL(upstreamURL), nil)
 		if errRequest != nil {
@@ -111,6 +127,7 @@ func (h *Handler) HandleDirectWebsocket(c *gin.Context) {
 	}
 
 	upstream, handshakeResponse, errDial := dialUpstream(selected)
+
 	if errDial != nil {
 		status := clienterror.HTTPStatusFromErrorOr(errDial, http.StatusBadGateway)
 		helpConfig := h.currentConfig()

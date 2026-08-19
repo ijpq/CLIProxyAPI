@@ -72,6 +72,31 @@ func TestFindAllAntigravityCreditsCandidateAuths_PrefersKnownCreditsThenUnknown(
 	if pinned[0].auth.ID != "aa-unknown" {
 		t.Fatalf("pinned[0].auth.ID = %q, want %q", pinned[0].auth.ID, "aa-unknown")
 	}
+
+	allowedOpts := cliproxyexecutor.Options{
+		Metadata: map[string]any{cliproxyexecutor.AllowedAuthIDsMetadataKey: []string{"aa-unknown"}},
+	}
+	allowed, errAllowed := m.findAllAntigravityCreditsCandidateAuths(context.Background(), "claude-sonnet-4-6", allowedOpts)
+	if errAllowed != nil {
+		t.Fatalf("findAllAntigravityCreditsCandidateAuths(allowed) error = %v", errAllowed)
+	}
+	if len(allowed) != 1 || allowed[0].auth.ID != "aa-unknown" {
+		t.Fatalf("allowed candidates = %#v, want only %q", allowed, "aa-unknown")
+	}
+
+	disallowedPinnedOpts := cliproxyexecutor.Options{
+		Metadata: map[string]any{
+			cliproxyexecutor.PinnedAuthMetadataKey:     "zz-credits",
+			cliproxyexecutor.AllowedAuthIDsMetadataKey: []string{"aa-unknown"},
+		},
+	}
+	disallowedPinned, errDisallowedPinned := m.findAllAntigravityCreditsCandidateAuths(context.Background(), "claude-sonnet-4-6", disallowedPinnedOpts)
+	if errDisallowedPinned != nil {
+		t.Fatalf("findAllAntigravityCreditsCandidateAuths(disallowed pinned) error = %v", errDisallowedPinned)
+	}
+	if len(disallowedPinned) != 0 {
+		t.Fatalf("disallowed pinned candidates = %#v, want none", disallowedPinned)
+	}
 }
 
 func TestFindAllAntigravityCreditsCandidateAuths_HomeKVUnavailableReturnsError(t *testing.T) {

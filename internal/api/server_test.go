@@ -18,6 +18,7 @@ import (
 
 	gin "github.com/gin-gonic/gin"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v7/internal/api/handlers/management"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	claudemodels "github.com/router-for-me/CLIProxyAPI/v7/internal/client/claude/models"
 	proxyconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
@@ -34,16 +35,18 @@ import (
 )
 
 type codexSearchCaptureExecutor struct {
-	request      *http.Request
-	body         []byte
-	authIDs      []string
-	prepareErr   error
-	httpErr      error
-	responseBody io.ReadCloser
-	statuses     []int
-	refreshCalls int
-	httpCalls    int
-	beforeReturn func()
+	request         *http.Request
+	body            []byte
+	authIDs         []string
+	prepareErr      error
+	httpErr         error
+	responseBody    io.ReadCloser
+	statuses        []int
+	refreshAuthID   string
+	refreshProvider string
+	refreshCalls    int
+	httpCalls       int
+	beforeReturn    func()
 }
 
 func (e *codexSearchCaptureExecutor) Identifier() string { return "codex" }
@@ -59,6 +62,12 @@ func (e *codexSearchCaptureExecutor) ExecuteStream(context.Context, *auth.Auth, 
 func (e *codexSearchCaptureExecutor) Refresh(_ context.Context, a *auth.Auth) (*auth.Auth, error) {
 	e.refreshCalls++
 	updated := a.Clone()
+	if e.refreshAuthID != "" {
+		updated.ID = e.refreshAuthID
+	}
+	if e.refreshProvider != "" {
+		updated.Provider = e.refreshProvider
+	}
 	if updated.Metadata == nil {
 		updated.Metadata = make(map[string]any)
 	}
@@ -84,6 +93,21 @@ func (e *codexSearchCaptureExecutor) PrepareRequest(req *http.Request, a *auth.A
 	return nil
 }
 
+type codexSearchRestrictedAccessProvider struct{}
+
+func (codexSearchRestrictedAccessProvider) Identifier() string { return "codex-search-restricted" }
+
+func (codexSearchRestrictedAccessProvider) Authenticate(context.Context, *http.Request) (*sdkaccess.Result, *sdkaccess.AuthError) {
+	return &sdkaccess.Result{
+		Provider:  "codex-search-restricted",
+		Principal: "portal-key",
+		Metadata: map[string]string{
+			billing.MetadataKeyAllowedAuthIDs: "home-codex-search",
+			billing.MetadataKeyAllowedModels:  "gpt-5-codex",
+		},
+	}, nil
+}
+
 type codexSearchGinContextSelector struct {
 	ginContext *gin.Context
 }
@@ -97,6 +121,22 @@ func (s *codexSearchGinContextSelector) Pick(ctx context.Context, _ string, _ st
 }
 
 type codexSearchAPIKeyFirstSelector struct{}
+
+type codexSearchPreferredAuthSelector struct {
+	id string
+}
+
+func (s *codexSearchPreferredAuthSelector) Pick(_ context.Context, _ string, _ string, _ coreexecutor.Options, auths []*auth.Auth) (*auth.Auth, error) {
+	for _, candidate := range auths {
+		if candidate.ID == s.id {
+			return candidate, nil
+		}
+	}
+	if len(auths) == 0 {
+		return nil, nil
+	}
+	return auths[0], nil
+}
 
 type codexSearchModelRouter struct {
 	response pluginapi.ModelRouteResponse
@@ -834,6 +874,61 @@ func TestCodexAlphaSearchForwardsRequest(t *testing.T) {
 	}
 	if _, errParse := time.Parse("20060102150405", parts[0]); errParse != nil {
 		t.Fatalf("trace timestamp = %q: %v", parts[0], errParse)
+	}
+}
+
+func TestCodexAlphaSearchRejectsUnresolvedRestrictedModel(t *testing.T) {
+	server := newTestServer(t)
+	server.accessManager.SetProviders([]sdkaccess.Provider{billingContextAccessProvider{}})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"query":"golang"}`))
+	req.Header.Set("Authorization", "Bearer portal-key")
+	recorder := httptest.NewRecorder()
+	server.engine.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+}
+
+func TestCodexAlphaSearchRestrictsSelectionToAllowedAuthIDs(t *testing.T) {
+	server := newTestServer(t)
+	server.accessManager.SetProviders([]sdkaccess.Provider{billingContextAccessProvider{}})
+	executor := &codexSearchCaptureExecutor{}
+	server.handlers.AuthManager.RegisterExecutor(executor)
+	server.handlers.AuthManager.SetSelector(&codexSearchPreferredAuthSelector{id: "account-denied"})
+	for _, credential := range []*auth.Auth{
+		{
+			ID:       "account-denied",
+			Provider: "codex",
+			Status:   auth.StatusActive,
+			Metadata: map[string]any{"access_token": "denied-token"},
+		},
+		{
+			ID:       "account-1",
+			Provider: "codex",
+			Status:   auth.StatusActive,
+			Metadata: map[string]any{"access_token": "allowed-token"},
+		},
+	} {
+		if _, errRegister := server.handlers.AuthManager.Register(context.Background(), credential); errRegister != nil {
+			t.Fatalf("register Codex auth %s: %v", credential.ID, errRegister)
+		}
+		registry.GetGlobalRegistry().RegisterClient(credential.ID, credential.Provider, []*registry.ModelInfo{{ID: "model-1"}})
+		credentialID := credential.ID
+		t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(credentialID) })
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"model":"model-1","query":"golang"}`))
+	req.Header.Set("Authorization", "Bearer portal-key")
+	recorder := httptest.NewRecorder()
+	server.engine.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := executor.authIDs; len(got) != 1 || got[0] != "account-1" {
+		t.Fatalf("selected auth IDs = %v, want [account-1]", got)
 	}
 }
 

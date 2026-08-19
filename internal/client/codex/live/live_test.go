@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executionregistry"
@@ -22,6 +23,22 @@ import (
 )
 
 type apiKeyFirstSelector struct{}
+
+type preferredAuthSelector struct {
+	id string
+}
+
+func (s *preferredAuthSelector) Pick(_ context.Context, _ string, _ string, _ coreexecutor.Options, auths []*auth.Auth) (*auth.Auth, error) {
+	for _, candidate := range auths {
+		if candidate.ID == s.id {
+			return candidate, nil
+		}
+	}
+	if len(auths) == 0 {
+		return nil, nil
+	}
+	return auths[0], nil
+}
 
 func (*apiKeyFirstSelector) Pick(_ context.Context, _ string, _ string, _ coreexecutor.Options, auths []*auth.Auth) (*auth.Auth, error) {
 	for _, candidate := range auths {
@@ -36,15 +53,16 @@ func (*apiKeyFirstSelector) Pick(_ context.Context, _ string, _ string, _ coreex
 }
 
 type captureExecutor struct {
-	request      *http.Request
-	body         []byte
-	selectedAuth *auth.Auth
-	responseBody io.ReadCloser
-	statusCode   int
-	statuses     []int
-	httpCalls    atomic.Int32
-	refreshCalls atomic.Int32
-	beforeReturn func()
+	request       *http.Request
+	body          []byte
+	selectedAuth  *auth.Auth
+	responseBody  io.ReadCloser
+	statusCode    int
+	statuses      []int
+	refreshAuthID string
+	httpCalls     atomic.Int32
+	refreshCalls  atomic.Int32
+	beforeReturn  func()
 }
 
 func (*captureExecutor) Identifier() string { return "codex" }
@@ -60,6 +78,9 @@ func (*captureExecutor) ExecuteStream(context.Context, *auth.Auth, coreexecutor.
 func (e *captureExecutor) Refresh(_ context.Context, credential *auth.Auth) (*auth.Auth, error) {
 	e.refreshCalls.Add(1)
 	updated := credential.Clone()
+	if e.refreshAuthID != "" {
+		updated.ID = e.refreshAuthID
+	}
 	if updated.Metadata == nil {
 		updated.Metadata = make(map[string]any)
 	}
@@ -308,6 +329,100 @@ func multipartBody(boundary, sdp, session string) string {
 			session + "\r\n"
 	}
 	return body + "--" + boundary + "--\r\n"
+}
+
+func TestHandlerRejectsDisallowedMultipartModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewHandler(auth.NewManager(nil, nil, nil), nil)
+	router := gin.New()
+	router.POST("/v1/realtime/calls", func(c *gin.Context) {
+		ctx := billing.WithAllowedModels(c.Request.Context(), []string{"gpt-realtime"})
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}, handler.Handle)
+
+	const boundary = "restricted-realtime-boundary"
+	body := multipartBody(boundary, "v=0\r\n", `{"type":"realtime","model":"another-live-model"}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/realtime/calls", strings.NewReader(body))
+	request.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+}
+
+func TestHandlerUsesStandardRealtimeDefaultForModelACL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	manager := auth.NewManager(nil, nil, nil)
+	executor := &captureExecutor{responseBody: io.NopCloser(strings.NewReader("v=0\r\n"))}
+	manager.RegisterExecutor(executor)
+	registerCredential(t, manager, &auth.Auth{
+		ID:       "codex-oauth",
+		Provider: "codex",
+		Status:   auth.StatusActive,
+		Metadata: map[string]any{"access_token": "oauth-token"},
+	})
+	handler := NewHandler(manager, nil)
+	router := gin.New()
+	router.POST("/v1/realtime/calls", func(c *gin.Context) {
+		ctx := billing.WithAllowedModels(c.Request.Context(), []string{"gpt-realtime"})
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}, handler.Handle)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/realtime/calls", strings.NewReader("v=0\r\n"))
+	request.Header.Set("Content-Type", "application/sdp")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+	stored, ok := handler.sessions.peek("call-123")
+	if !ok || stored.requestedModel != "gpt-realtime" || stored.model != defaultLiveModel {
+		t.Fatalf("stored session = %+v, exists=%t", stored, ok)
+	}
+}
+
+func TestHandlerRestrictsLiveSelectionToAllowedAuthIDs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	manager := auth.NewManager(nil, &preferredAuthSelector{id: "codex-denied"}, nil)
+	executor := &captureExecutor{responseBody: io.NopCloser(strings.NewReader("v=0\r\n"))}
+	manager.RegisterExecutor(executor)
+	registerCredential(t, manager, &auth.Auth{
+		ID:       "codex-denied",
+		Provider: "codex",
+		Status:   auth.StatusActive,
+		Metadata: map[string]any{"access_token": "denied-token"},
+	})
+	registerCredential(t, manager, &auth.Auth{
+		ID:       "codex-allowed",
+		Provider: "codex",
+		Status:   auth.StatusActive,
+		Metadata: map[string]any{"access_token": "allowed-token"},
+	})
+	handler := NewHandler(manager, nil)
+	router := gin.New()
+	router.POST("/v1/realtime/calls", func(c *gin.Context) {
+		ctx := billing.WithAllowedAuthIDs(c.Request.Context(), []string{"codex-allowed"})
+		ctx = billing.WithAllowedModels(ctx, []string{"gpt-realtime"})
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}, handler.Handle)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/realtime/calls", strings.NewReader(`{"sdp":"v=0\\r\\n","session":{"type":"realtime","model":"gpt-realtime"}}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+	if executor.selectedAuth == nil || executor.selectedAuth.ID != "codex-allowed" {
+		t.Fatalf("selected auth = %#v, want codex-allowed", executor.selectedAuth)
+	}
 }
 
 func TestHandlerRewritesLiveCallAndSchedulesOAuth(t *testing.T) {
@@ -892,6 +1007,77 @@ func TestHomeLiveSessionExpiryReleasesSelection(t *testing.T) {
 	t.Fatal("expired Home live session remained active")
 }
 
+func TestHandleSidebandRejectsRetainedHomeAuthIdentityMismatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	manager := auth.NewManager(nil, nil, nil)
+	manager.SetConfig(&config.Config{Home: config.HomeConfig{Enabled: true}})
+	registry := executionregistry.New()
+	manager.PublishHomeDispatch(&homeDispatcher{}, registry, 1)
+	manager.RegisterExecutor(&captureExecutor{})
+	selection, errSelect := manager.SelectHomeAuthByKind(context.Background(), "codex", defaultLiveModel, auth.AuthKindOAuth, coreexecutor.Options{})
+	if errSelect != nil {
+		t.Fatalf("SelectHomeAuthByKind() error = %v", errSelect)
+	}
+	selection.Retain()
+
+	handler := NewHandler(manager, nil)
+	handler.sessions.put("call-stale-auth", liveSession{
+		authID:        "expected-home-auth",
+		model:         defaultLiveModel,
+		homeSelection: selection,
+	})
+	router := gin.New()
+	router.GET("/v1/live/:call_id", handler.HandleSideband)
+	request := httptest.NewRequest(http.MethodGet, "/v1/live/call-stale-auth", nil)
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if _, ok := handler.sessions.peek("call-stale-auth"); ok {
+		t.Fatal("auth-mismatched sideband retained session")
+	}
+	if selection.Active() {
+		t.Fatal("auth-mismatched sideband retained Home selection")
+	}
+	if errDrain := registry.Drain(context.Background()); errDrain != nil {
+		t.Fatalf("Drain() error = %v", errDrain)
+	}
+}
+
+func TestHandleSidebandRejectsCurrentAccessScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	manager := auth.NewManager(nil, nil, nil)
+	handler := NewHandler(manager, nil)
+	handler.sessions.put("call-access-denied", liveSession{
+		authID:         "codex-denied",
+		model:          defaultLiveModel,
+		requestedModel: "gpt-realtime",
+	})
+	router := gin.New()
+	router.GET("/v1/live/:call_id", func(c *gin.Context) {
+		ctx := billing.WithAllowedAuthIDs(c.Request.Context(), []string{"codex-allowed"})
+		ctx = billing.WithAllowedModels(ctx, []string{"gpt-realtime"})
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}, handler.HandleSideband)
+	request := httptest.NewRequest(http.MethodGet, "/v1/live/call-access-denied", nil)
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), `"code":"realtime_call_access_denied"`) {
+		t.Fatalf("response = %d %s, want Realtime access denial", recorder.Code, recorder.Body.String())
+	}
+	if _, ok := handler.sessions.peek("call-access-denied"); ok {
+		t.Fatal("access-denied sideband retained session")
+	}
+}
+
 func TestHandleSidebandPinsAuthAndRelaysBidirectionally(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -930,9 +1116,14 @@ func TestHandleSidebandPinsAuthAndRelaysBidirectionally(t *testing.T) {
 
 	handler := NewHandler(manager, nil)
 	handler.sidebandAPIBaseURL = "ws" + strings.TrimPrefix(upstreamServer.URL, "http") + "/v1"
-	handler.sessions.put("call-sideband", liveSession{authID: "pinned-oauth", model: defaultLiveModel})
+	handler.sessions.put("call-sideband", liveSession{authID: "pinned-oauth", model: defaultLiveModel, requestedModel: "gpt-realtime"})
 	router := gin.New()
-	router.GET("/v1/live/:call_id", handler.HandleSideband)
+	router.GET("/v1/live/:call_id", func(c *gin.Context) {
+		ctx := billing.WithAllowedAuthIDs(c.Request.Context(), []string{"pinned-oauth"})
+		ctx = billing.WithAllowedModels(ctx, []string{"gpt-realtime"})
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}, handler.HandleSideband)
 	downstreamServer := httptest.NewServer(router)
 	defer downstreamServer.Close()
 
@@ -1102,7 +1293,7 @@ func TestPrepareCallRequestRewritesMultipart(t *testing.T) {
 	const boundary = "live-model-boundary"
 	body := multipartBody(boundary, "v=0-offer", `{"model":"future-live-model","instructions":"hi"}`)
 
-	encoded, contentType, model, errPrepare := prepareCallRequest([]byte(body), "multipart/form-data; boundary="+boundary)
+	encoded, contentType, model, errPrepare := prepareCallRequest([]byte(body), "multipart/form-data; boundary="+boundary, defaultLiveModel)
 	if errPrepare != nil {
 		t.Fatalf("prepareCallRequest() error = %v", errPrepare)
 	}
@@ -1126,7 +1317,7 @@ func TestPrepareCallRequestRewritesMultipart(t *testing.T) {
 
 func TestPrepareCallRequestPreservesRawSDPWhenRelayDisabled(t *testing.T) {
 	body := []byte("v=0\r\no=raw-offer\r\n")
-	prepared, contentType, model, errPrepare := prepareCallRequest(body, "application/sdp")
+	prepared, contentType, model, errPrepare := prepareCallRequest(body, "application/sdp", defaultLiveModel)
 	if errPrepare != nil {
 		t.Fatalf("prepareCallRequest() error = %v", errPrepare)
 	}
@@ -1222,7 +1413,7 @@ func TestPrepareCallRequestRejectsInvalidMultipart(t *testing.T) {
 		`{"model":"gpt-live-1-codex"}` + "\r\n" +
 		"--" + boundary + "--\r\n"
 
-	if _, _, _, errPrepare := prepareCallRequest([]byte(body), "multipart/form-data; boundary="+boundary); errPrepare == nil {
+	if _, _, _, errPrepare := prepareCallRequest([]byte(body), "multipart/form-data; boundary="+boundary, defaultLiveModel); errPrepare == nil {
 		t.Fatal("prepareCallRequest() accepted multipart body without sdp")
 	}
 }

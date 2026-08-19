@@ -960,14 +960,15 @@ func (m *Manager) pickNextViaHome(ctx context.Context, model string, opts clipro
 			selection.End("repeated_auth")
 			return nil, nil, "", repeatedHomeAuthError()
 		}
-		if authAllowedByMetadata(selectionAuth, opts.Metadata) {
+		mismatchReason := authAccessMetadataMismatch(selectionAuth, opts.Metadata)
+		if mismatchReason == "" {
 			auth := selection.CloneAuthForRoute(model)
 			executor := selection.Executor
 			provider := selection.Provider
 			selection.End("legacy_selection_unbound")
 			return auth, executor, provider, nil
 		}
-		if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "auth_not_allowed"); errEnd != nil {
+		if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, mismatchReason); errEnd != nil {
 			return nil, nil, "", errEnd
 		}
 		exclusions[authID] = struct{}{}
@@ -1165,10 +1166,6 @@ func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, o
 		endScope()
 		return nil, &Error{Code: "invalid_auth", Message: "home returned auth without id", HTTPStatus: http.StatusBadGateway}
 	}
-	if pinnedAuthID != "" && strings.TrimSpace(auth.ID) != pinnedAuthID {
-		endScope()
-		return nil, &Error{Code: "auth_not_found", Message: "home returned an auth that does not match the pinned credential", HTTPStatus: http.StatusServiceUnavailable}
-	}
 	if errIdentity := verifyAccountedHomeConcurrencyIdentity(envelope.Tuple, &auth, dispatch.AuthIndex); errIdentity != nil {
 		endScope()
 		return nil, errIdentity
@@ -1289,6 +1286,9 @@ func (m *Manager) findAllAntigravityCreditsCandidateAuths(ctx context.Context, r
 			continue
 		}
 		if pinnedAuthID != "" && auth.ID != pinnedAuthID {
+			continue
+		}
+		if !authAllowedByMetadata(auth, opts.Metadata) {
 			continue
 		}
 		if !strings.EqualFold(strings.TrimSpace(auth.Provider), "antigravity") {

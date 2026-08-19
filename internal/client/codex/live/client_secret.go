@@ -13,18 +13,21 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 )
 
 const (
-	ClientSecretSessionContextKey   = "codexLiveClientSecretSession"
-	ClientSecretPrincipalContextKey = "codexLiveClientSecretPrincipal"
-	clientSecretPrefix              = "ek_"
-	clientSecretDefaultLifetime     = 10 * time.Minute
-	clientSecretMinimumLifetime     = 10 * time.Second
-	clientSecretMaximumLifetime     = 2 * time.Hour
-	clientSecretMaxBodySize         = 64 << 10
-	clientSecretMaxEntries          = 1024
-	clientSecretMaxEntriesPerIssuer = 64
+	ClientSecretSessionContextKey        = "codexLiveClientSecretSession"
+	ClientSecretPrincipalContextKey      = "codexLiveClientSecretPrincipal"
+	ClientSecretRequestedModelContextKey = "codexLiveClientSecretRequestedModel"
+	clientSecretPrefix                   = "ek_"
+	clientSecretDefaultLifetime          = 10 * time.Minute
+	clientSecretMinimumLifetime          = 10 * time.Second
+	clientSecretMaximumLifetime          = 2 * time.Hour
+	clientSecretMaxBodySize              = 64 << 10
+	clientSecretMaxEntries               = 1024
+	clientSecretMaxEntriesPerIssuer      = 64
 )
 
 var (
@@ -38,6 +41,13 @@ type ClientSecretAuthorization struct {
 	Principal       string
 	IssuerPrincipal string
 	IssuerProvider  string
+	IssuerUserID    string
+	IssuerAPIKeyID  string
+	IssuerUnbilled  bool
+	IssuerMetadata  map[string]string
+	AllowedAuthIDs  []string
+	AllowedModels   []string
+	RequestedModel  string
 	Session         json.RawMessage
 }
 
@@ -73,7 +83,7 @@ func newClientSecretStore() *clientSecretStore {
 	}
 }
 
-func (s *clientSecretStore) create(session json.RawMessage, lifetime time.Duration, issuerPrincipal, issuerProvider string) (string, ClientSecretAuthorization, time.Time, error) {
+func (s *clientSecretStore) create(session json.RawMessage, lifetime time.Duration, authorization ClientSecretAuthorization) (string, ClientSecretAuthorization, time.Time, error) {
 	if s == nil {
 		return "", ClientSecretAuthorization{}, time.Time{}, errors.New("Realtime client secret store unavailable")
 	}
@@ -85,12 +95,13 @@ func (s *clientSecretStore) create(session json.RawMessage, lifetime time.Durati
 	if errSessionID != nil {
 		return "", ClientSecretAuthorization{}, time.Time{}, errSessionID
 	}
-	authorization := ClientSecretAuthorization{
-		Principal:       sessionID,
-		IssuerPrincipal: strings.TrimSpace(issuerPrincipal),
-		IssuerProvider:  strings.TrimSpace(issuerProvider),
-		Session:         append(json.RawMessage(nil), session...),
-	}
+	authorization.Principal = sessionID
+	authorization.IssuerPrincipal = strings.TrimSpace(authorization.IssuerPrincipal)
+	authorization.IssuerProvider = strings.TrimSpace(authorization.IssuerProvider)
+	authorization.RequestedModel = strings.TrimSpace(authorization.RequestedModel)
+	authorization.Session = append(json.RawMessage(nil), session...)
+	authorization.AllowedAuthIDs = append([]string(nil), authorization.AllowedAuthIDs...)
+	authorization.AllowedModels = append([]string(nil), authorization.AllowedModels...)
 	now := s.currentTime()
 	expiresAt := now.Add(lifetime)
 	s.mu.Lock()
@@ -111,9 +122,10 @@ func (s *clientSecretStore) create(session json.RawMessage, lifetime time.Durati
 			return "", ClientSecretAuthorization{}, time.Time{}, errClientSecretCapacity
 		}
 	}
-	s.entries[token] = clientSecretEntry{authorization: authorization, expiresAt: expiresAt}
+	storedAuthorization := cloneClientSecretAuthorization(authorization)
+	s.entries[token] = clientSecretEntry{authorization: storedAuthorization, expiresAt: expiresAt}
 	s.mu.Unlock()
-	return token, authorization, expiresAt, nil
+	return token, cloneClientSecretAuthorization(storedAuthorization), expiresAt, nil
 }
 
 func (s *clientSecretStore) authenticate(token string) (ClientSecretAuthorization, error) {
@@ -129,8 +141,21 @@ func (s *clientSecretStore) authenticate(token string) (ClientSecretAuthorizatio
 		return ClientSecretAuthorization{}, errInvalidClientSecret
 	}
 	s.mu.Unlock()
-	entry.authorization.Session = append(json.RawMessage(nil), entry.authorization.Session...)
-	return entry.authorization, nil
+	return cloneClientSecretAuthorization(entry.authorization), nil
+}
+
+func cloneClientSecretAuthorization(authorization ClientSecretAuthorization) ClientSecretAuthorization {
+	authorization.Session = append(json.RawMessage(nil), authorization.Session...)
+	authorization.AllowedAuthIDs = append([]string(nil), authorization.AllowedAuthIDs...)
+	authorization.AllowedModels = append([]string(nil), authorization.AllowedModels...)
+	if authorization.IssuerMetadata != nil {
+		metadata := make(map[string]string, len(authorization.IssuerMetadata))
+		for key, value := range authorization.IssuerMetadata {
+			metadata[key] = value
+		}
+		authorization.IssuerMetadata = metadata
+	}
+	return authorization
 }
 
 func (s *clientSecretStore) close() {
@@ -265,11 +290,29 @@ func (h *Handler) createClientSecret(c *gin.Context, session json.RawMessage, ex
 		writeRealtimeError(c, http.StatusBadRequest, errSession.Error(), "invalid_request_error", "invalid_session")
 		return
 	}
+	requestedModel := modelFromJSON(clientSession)
+	if !billing.ModelAllowed(c.Request.Context(), requestedModel) {
+		writeRealtimeError(c, http.StatusForbidden, "Model not allowed for this account", "invalid_request_error", "model_not_allowed")
+		return
+	}
 	issuerPrincipal, _ := c.Get("userApiKey")
 	issuerProvider, _ := c.Get("accessProvider")
+	issuerMetadata, _ := c.Get("accessMetadata")
 	issuerPrincipalValue, _ := issuerPrincipal.(string)
 	issuerProviderValue, _ := issuerProvider.(string)
-	token, authorization, expiresAt, errCreate := h.clientSecrets.create(upstreamSession, lifetime, issuerPrincipalValue, issuerProviderValue)
+	issuerMetadataValue, _ := issuerMetadata.(map[string]string)
+	requestCtx := c.Request.Context()
+	token, authorization, expiresAt, errCreate := h.clientSecrets.create(upstreamSession, lifetime, ClientSecretAuthorization{
+		IssuerPrincipal: issuerPrincipalValue,
+		IssuerProvider:  issuerProviderValue,
+		IssuerUserID:    billing.UserIDFromContext(requestCtx),
+		IssuerAPIKeyID:  billing.APIKeyIDFromContext(requestCtx),
+		IssuerUnbilled:  billing.UnbilledFromContext(requestCtx),
+		IssuerMetadata:  issuerMetadataValue,
+		AllowedAuthIDs:  append([]string(nil), billing.AllowedAuthIDsFromContext(requestCtx)...),
+		AllowedModels:   append([]string(nil), billing.AllowedModelsFromContext(requestCtx)...),
+		RequestedModel:  requestedModel,
+	})
 	if errCreate != nil {
 		if errors.Is(errCreate, errClientSecretCapacity) {
 			c.Header("Retry-After", "1")
@@ -365,13 +408,17 @@ func realtimeSessionResponse(session json.RawMessage, sessionID string, expiresA
 	return json.Marshal(response)
 }
 
+func realtimeBaseModel(model string) string {
+	return strings.TrimSpace(thinking.ParseSuffix(strings.TrimSpace(model)).ModelName)
+}
+
 func codexRealtimeModel(model string) string {
-	trimmed := strings.TrimSpace(model)
-	lower := strings.ToLower(trimmed)
+	baseModel := realtimeBaseModel(model)
+	lower := strings.ToLower(baseModel)
 	if lower == "" || lower == "gpt-realtime" || strings.HasPrefix(lower, "gpt-realtime-") || strings.Contains(lower, "realtime-preview") {
 		return defaultLiveModel
 	}
-	return trimmed
+	return baseModel
 }
 
 func liveSelectionHeaders(c *gin.Context) http.Header {
@@ -407,6 +454,15 @@ func clientSecretSession(c *gin.Context) json.RawMessage {
 	}
 	session, _ := value.(json.RawMessage)
 	return append(json.RawMessage(nil), session...)
+}
+
+func clientSecretRequestedModel(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	value, _ := c.Get(ClientSecretRequestedModelContextKey)
+	model, _ := value.(string)
+	return strings.TrimSpace(model)
 }
 
 func writeRealtimeError(c *gin.Context, status int, message, errorType, code string) {
