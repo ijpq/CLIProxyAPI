@@ -1,8 +1,12 @@
 # CLIProxyAPI 计费系统使用指南
 
+> 开发者接手、架构、发布流程和历史踩坑请先阅读 [CLIProxyAPI Fork 开发交接手册](DEVELOPER_HANDOFF_CN.md)。
+
 ## 一、部署配置
 
 在 `.env` 或 Docker 环境变量中配置以下内容（按需启用）：
+
+> 本地直接运行二进制时，工作目录的 `.env` 会自动加载。Docker Compose 默认只用宿主机 `.env` 做 `${VAR}` 插值，不会自动把所有变量传进容器；当前 `docker-compose.yml` 只显式转发了少数基础 Billing 变量。使用 SMTP、充值、Telegram、pricing、rate 等可选项时，请把它们逐项加入 `cli-proxy-api.environment`，或为该 service 添加 `env_file: [.env]`，然后重新创建容器。
 
 ```bash
 # ===== 必填 =====
@@ -57,7 +61,7 @@ BILLING_LOGIN_CODE_TTL=10m                # 验证码有效期（默认 10m）
 BILLING_LOGIN_CODE_COOLDOWN=60s           # 同一邮箱两次请求最小间隔（默认 60s）
 ```
 
-> 邮箱验证码登录：用户在登录页选「验证码」→ 填邮箱 → 收验证码 → 登录。**未注册的邮箱首次验证码登录即自动创建账号**（无密码，可在「设置」补设密码）。忘记密码时也可用它登录。
+> 邮箱验证码登录：用户在登录页选「验证码」→ 填邮箱 → 收验证码 → 登录。**未注册的邮箱首次验证码登录即自动创建账号**。当前这类账号会写入随机密码，而修改密码接口仍要求原密码，因此暂时只能继续使用验证码登录，不能自行补设密码；这是待修问题。
 
 ### pricing.json 示例
 
@@ -240,8 +244,11 @@ USDT 充值在链上自动确认，无需手动操作。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | /config | Portal 可用登录方式等公开配置 |
 | POST | /register | 注册 `{email, password, display_name}` |
 | POST | /login | 登录 `{email, password}` → `{token, user}` |
+| POST | /login/code/request | 请求邮箱登录验证码 |
+| POST | /login/code/verify | 验证邮箱验证码并登录；未注册邮箱会创建账号 |
 
 ### 需要 Bearer Token
 
@@ -251,10 +258,15 @@ USDT 充值在链上自动确认，无需手动操作。
 | POST | /change-password | 修改密码 `{old_password, new_password}` |
 | GET | /wallet | 余额 `{balance}` |
 | GET | /usage?limit=50&before=RFC3339 | 用量记录（游标分页） |
+| GET | /usage/filters | 当前用量筛选项 |
 | GET | /usage/stats?days=30 | 聚合统计（日消费 + 模型分布） |
 | GET | /api-keys | 列出所有 Key |
 | POST | /api-keys | 创建 Key `{name}` → 含 `key` 明文 |
 | DELETE | /api-keys/:id | 吊销 Key |
+| GET | /account-labels | 当前用户可见的上游账号安全显示名 |
+| GET | /quota | 当前用户允许账号的实时额度 |
+| GET | /quota/:handle | 刷新单账号额度 |
+| POST | /quota/:handle/reset | 重置单账号额度；要求管理员授予 `allow_reset` |
 | GET | /topup/methods | 可用充值方式 |
 | POST | /topup | 创建订单 `{amount, method, network}` |
 | GET | /topup | 充值订单列表 |
@@ -273,6 +285,7 @@ USDT 充值在链上自动确认，无需手动操作。
 | POST | /admin/users/:id/limits | 设置某用户的访问控制 `{unbilled, allowed_models:[], allowed_auth_ids:[]}` |
 | GET | /admin/models | 列出全部可选模型（供白名单选择） |
 | GET | /admin/accounts | 列出全部上游账号（id/provider/label/status） |
+| POST | /admin/accounts/alias | 设置客户可见账号别名 |
 
 ---
 
@@ -287,6 +300,10 @@ USDT 充值在链上自动确认，无需手动操作。
 | `allowed_auth_ids` | **可用账号白名单**：只能使用这些上游账号（空 = 全部） |
 
 三者独立、任意组合，且**作用于该用户名下所有 API Key**（设置在用户上，不在 Key 上）。
+
+> **当前重要限制：空列表表示“全部”，不是“禁止全部”。** 如果管理员把某用户允许的最后一个认证文件也删除，`allowed_auth_ids=[]` 会恢复为不限制账号。需要禁止用户请求时，应吊销该用户的全部 Key，或在后续版本实现明确的 `all / allowlist / none` 三态策略。不要直接把历史空值改成 deny-all，否则所有未配置白名单的现有用户都会被封禁。
+>
+> `users.status` 当前也没有参与 `cpk_` Key 的数据库认证。把用户标记为非 active 只会影响 Portal 登录，不能替代吊销 Key。
 
 ### 5.1 怎么设
 
@@ -333,4 +350,4 @@ A: 启用自动确认后，通常 30 秒内。如果超过 5 分钟未到账，�
 A: 可以。每个 Key 的用量会分别记录但统一从同一个钱包扣费。
 
 **Q: 忘记密码怎么办？**
-A: 目前需要联系管理员重置。管理员可以通过数据库直接更新密码哈希。
+A: 如果部署配置了 SMTP，可以继续用邮箱验证码登录，但当前还没有“验证码验证后重设密码”的流程；需要设置新密码时请联系管理员/开发者处理。未启用邮箱登录时也需联系管理员。
