@@ -12,10 +12,14 @@ import (
 )
 
 type accessLimitExecutor struct {
-	provider     string
-	executeCalls int
-	countCalls   int
-	streamCalls  int
+	provider       string
+	failAuthID     string
+	executeCalls   int
+	countCalls     int
+	streamCalls    int
+	executeAuthIDs []string
+	countAuthIDs   []string
+	streamAuthIDs  []string
 }
 
 type outOfBandSelector struct {
@@ -24,6 +28,10 @@ type outOfBandSelector struct {
 
 type inPlaceMutatingSelector struct {
 	mutate func(*Auth)
+}
+
+type metadataMutatingSelector struct {
+	replacement string
 }
 
 type selectorCredentialMetadata struct {
@@ -63,15 +71,38 @@ func (s *inPlaceMutatingSelector) Pick(_ context.Context, _ string, _ string, _ 
 	return auths[0], nil
 }
 
+func (s *metadataMutatingSelector) Pick(_ context.Context, _ string, _ string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	if allowed, ok := opts.Metadata[cliproxyexecutor.AllowedAuthIDsMetadataKey].([]string); ok && len(allowed) > 0 {
+		allowed[0] = s.replacement
+	}
+	if pinned, ok := opts.Metadata[cliproxyexecutor.PinnedAuthMetadataKey].([]byte); ok {
+		copy(pinned, s.replacement)
+	}
+	opts.Metadata[cliproxyexecutor.AllowedAuthIDsMetadataKey] = []string{s.replacement}
+	opts.Metadata[cliproxyexecutor.PinnedAuthMetadataKey] = s.replacement
+	if len(auths) == 0 {
+		return nil, nil
+	}
+	return auths[0], nil
+}
+
 func (e *accessLimitExecutor) Identifier() string { return e.provider }
 
-func (e *accessLimitExecutor) Execute(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *accessLimitExecutor) Execute(_ context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	e.executeCalls++
+	e.executeAuthIDs = append(e.executeAuthIDs, auth.ID)
+	if auth.ID == e.failAuthID {
+		return cliproxyexecutor.Response{}, errors.New("retryable access-limit failure")
+	}
 	return cliproxyexecutor.Response{Payload: []byte("ok")}, nil
 }
 
-func (e *accessLimitExecutor) ExecuteStream(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+func (e *accessLimitExecutor) ExecuteStream(_ context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	e.streamCalls++
+	e.streamAuthIDs = append(e.streamAuthIDs, auth.ID)
+	if auth.ID == e.failAuthID {
+		return nil, errors.New("retryable access-limit failure")
+	}
 	chunks := make(chan cliproxyexecutor.StreamChunk, 1)
 	chunks <- cliproxyexecutor.StreamChunk{Payload: []byte("ok")}
 	close(chunks)
@@ -82,8 +113,12 @@ func (e *accessLimitExecutor) Refresh(_ context.Context, auth *Auth) (*Auth, err
 	return auth, nil
 }
 
-func (e *accessLimitExecutor) CountTokens(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *accessLimitExecutor) CountTokens(_ context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	e.countCalls++
+	e.countAuthIDs = append(e.countAuthIDs, auth.ID)
+	if auth.ID == e.failAuthID {
+		return cliproxyexecutor.Response{}, errors.New("retryable access-limit failure")
+	}
 	return cliproxyexecutor.Response{Payload: []byte("ok")}, nil
 }
 
@@ -231,6 +266,76 @@ func TestManagerAllowedAuthIDsRejectOutOfBandSelectorResult(t *testing.T) {
 	var authErr *Error
 	if !errors.As(errPick, &authErr) || authErr.Code != "auth_not_found" {
 		t.Fatalf("SelectAuth() error = %#v, want auth_not_found", errPick)
+	}
+}
+
+func TestManagerCustomSelectorCannotMutateAccessLimitsAcrossRetries(t *testing.T) {
+	const (
+		allowedAuthID = "selector-auth-a"
+		deniedAuthID  = "selector-auth-b"
+	)
+
+	modes := []struct {
+		name    string
+		run     func(*Manager, string, cliproxyexecutor.Options) error
+		authIDs func(*accessLimitExecutor) []string
+	}{
+		{
+			name: "execute",
+			run: func(manager *Manager, model string, opts cliproxyexecutor.Options) error {
+				_, errExecute := manager.Execute(context.Background(), []string{"selector-access-provider"}, cliproxyexecutor.Request{Model: model}, opts)
+				return errExecute
+			},
+			authIDs: func(executor *accessLimitExecutor) []string { return executor.executeAuthIDs },
+		},
+		{
+			name: "count",
+			run: func(manager *Manager, model string, opts cliproxyexecutor.Options) error {
+				_, errCount := manager.ExecuteCount(context.Background(), []string{"selector-access-provider"}, cliproxyexecutor.Request{Model: model}, opts)
+				return errCount
+			},
+			authIDs: func(executor *accessLimitExecutor) []string { return executor.countAuthIDs },
+		},
+		{
+			name: "stream",
+			run: func(manager *Manager, model string, opts cliproxyexecutor.Options) error {
+				stream, errStream := manager.ExecuteStream(context.Background(), []string{"selector-access-provider"}, cliproxyexecutor.Request{Model: model}, opts)
+				if errStream != nil {
+					return errStream
+				}
+				for range stream.Chunks {
+				}
+				return nil
+			},
+			authIDs: func(executor *accessLimitExecutor) []string { return executor.streamAuthIDs },
+		},
+	}
+
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			const provider = "selector-access-provider"
+			model := "selector-access-model-" + mode.name
+			registerSchedulerModels(t, provider, model, allowedAuthID, deniedAuthID)
+			executor := &accessLimitExecutor{provider: provider, failAuthID: allowedAuthID}
+			manager := NewManager(nil, &metadataMutatingSelector{replacement: deniedAuthID}, nil)
+			manager.RegisterExecutor(executor)
+			for _, authID := range []string{allowedAuthID, deniedAuthID} {
+				if _, errRegister := manager.Register(context.Background(), &Auth{ID: authID, Provider: provider}); errRegister != nil {
+					t.Fatalf("Register(%s) error = %v", authID, errRegister)
+				}
+			}
+			opts := cliproxyexecutor.Options{Metadata: map[string]any{
+				cliproxyexecutor.AllowedAuthIDsMetadataKey: []string{allowedAuthID},
+				cliproxyexecutor.PinnedAuthMetadataKey:     []byte(allowedAuthID),
+			}}
+
+			if errRun := mode.run(manager, model, opts); errRun == nil {
+				t.Fatal("execution error = nil, want allowed auth failure")
+			}
+			if got := mode.authIDs(executor); len(got) != 1 || got[0] != allowedAuthID {
+				t.Fatalf("executed auth IDs = %v, want only %q", got, allowedAuthID)
+			}
+		})
 	}
 }
 
