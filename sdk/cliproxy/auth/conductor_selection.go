@@ -857,6 +857,25 @@ func cloneAuthSliceForSelector(auths []*Auth) []*Auth {
 	return out
 }
 
+func cloneOptionsForSelector(opts cliproxyexecutor.Options) cliproxyexecutor.Options {
+	if len(opts.Metadata) == 0 {
+		return opts
+	}
+	metadata := make(map[string]any, len(opts.Metadata))
+	for key, value := range opts.Metadata {
+		switch typed := value.(type) {
+		case []string:
+			metadata[key] = append([]string(nil), typed...)
+		case []byte:
+			metadata[key] = append([]byte(nil), typed...)
+		default:
+			metadata[key] = value
+		}
+	}
+	opts.Metadata = metadata
+	return opts
+}
+
 func cloneSelectorMetadata(metadata map[string]any) map[string]any {
 	if len(metadata) == 0 {
 		return nil
@@ -1934,7 +1953,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	if !handled {
 		selectorCtx := selectorContextForAvailableAuths(ctx, selector, model)
 		// Isolate selector input so in-place mutations cannot alter the canonical eligible set.
-		selected, errPick = selector.Pick(selectorCtx, provider, selectionArgForSelector(selector, model), opts, cloneAuthSliceForSelector(selectorAuths))
+		selected, errPick = selector.Pick(selectorCtx, provider, selectionArgForSelector(selector, model), cloneOptionsForSelector(opts), cloneAuthSliceForSelector(selectorAuths))
 		if errPick != nil {
 			if isBuiltInSelector(selector) {
 				errPick = restoreModelCooldownErrorModel(errPick, model)
@@ -2285,7 +2304,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	if !handled {
 		selectorCtx := selectorContextForAvailableAuths(ctx, selector, model)
 		// Isolate selector input so in-place mutations cannot alter the canonical eligible set.
-		selected, errPick = selector.Pick(selectorCtx, "mixed", selectionArgForSelector(selector, model), opts, cloneAuthSliceForSelector(selectorAuths))
+		selected, errPick = selector.Pick(selectorCtx, "mixed", selectionArgForSelector(selector, model), cloneOptionsForSelector(opts), cloneAuthSliceForSelector(selectorAuths))
 		if errPick != nil {
 			if isBuiltInSelector(selector) {
 				errPick = restoreModelCooldownErrorModel(errPick, model)
