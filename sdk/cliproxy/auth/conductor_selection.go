@@ -890,6 +890,33 @@ func cloneAuthSliceForSelector(auths []*Auth) []*Auth {
 	return out
 }
 
+var selectorPropagatedMetadataKeys = map[string]struct{}{
+	cliproxyexecutor.LCPAffinitySessionIDMetadataKey:    {},
+	cliproxyexecutor.CanonicalSessionIDMetadataKey:      {},
+	cliproxyexecutor.ParentSessionIDMetadataKey:         {},
+	cliproxyexecutor.IsForkMetadataKey:                  {},
+	cliproxyexecutor.LCPAccessGenerationMetadataKey:     {},
+	cliproxyexecutor.LCPFingerprintMetadataKey:          {},
+	cliproxyexecutor.LCPMinPrefixLengthMetadataKey:      {},
+	cliproxyexecutor.SessionAffinityProviderMetadataKey: {},
+	cliproxyexecutor.SessionAffinityModelMetadataKey:    {},
+}
+
+func propagateSelectorMetadata(dest, src map[string]any) {
+	if dest == nil {
+		return
+	}
+	for key := range selectorPropagatedMetadataKeys {
+		if src != nil {
+			if val, ok := src[key]; ok {
+				dest[key] = val
+				continue
+			}
+		}
+		delete(dest, key)
+	}
+}
+
 func cloneOptionsForSelector(opts cliproxyexecutor.Options) cliproxyexecutor.Options {
 	if len(opts.Metadata) == 0 {
 		return opts
@@ -2061,7 +2088,9 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		selectorCtx := selectorContextForAvailableAuths(ctx, selector, model)
 		selectorCtx = withSessionAffinityTransientAuthIDs(selectorCtx, transientAuthIDs)
 		// Isolate selector input so in-place mutations cannot alter the canonical eligible set.
-		selected, errPick = selector.Pick(selectorCtx, provider, selectionArgForSelector(selector, model), cloneOptionsForSelector(opts), cloneAuthSliceForSelector(selectorAuths))
+		selectorOpts := cloneOptionsForSelector(opts)
+		selected, errPick = selector.Pick(selectorCtx, provider, selectionArgForSelector(selector, model), selectorOpts, cloneAuthSliceForSelector(selectorAuths))
+		propagateSelectorMetadata(opts.Metadata, selectorOpts.Metadata)
 		if errPick != nil {
 			if isBuiltInSelector(selector) {
 				errPick = restoreModelCooldownErrorModel(errPick, model)
@@ -2069,11 +2098,12 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 			m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errPick)
 			return nil, nil, errPick
 		}
-		if selected != nil {
-			selected = pickSchedulerAuthByID(selectorAuths, selected.ID)
-			if selected == nil {
-				return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned an ineligible auth"}
-			}
+		if selected == nil {
+			return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
+		}
+		selected = pickSchedulerAuthByID(selectorAuths, selected.ID)
+		if selected == nil {
+			return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned an ineligible auth"}
 		}
 	}
 	if selected == nil {
@@ -2426,7 +2456,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		selectorCtx := selectorContextForAvailableAuths(ctx, selector, model)
 		selectorCtx = withSessionAffinityTransientAuthIDs(selectorCtx, transientAuthIDs)
 		// Isolate selector input so in-place mutations cannot alter the canonical eligible set.
-		selected, errPick = selector.Pick(selectorCtx, "mixed", selectionArgForSelector(selector, model), cloneOptionsForSelector(opts), cloneAuthSliceForSelector(selectorAuths))
+		selectorOpts := cloneOptionsForSelector(opts)
+		selected, errPick = selector.Pick(selectorCtx, "mixed", selectionArgForSelector(selector, model), selectorOpts, cloneAuthSliceForSelector(selectorAuths))
+		propagateSelectorMetadata(opts.Metadata, selectorOpts.Metadata)
 		if errPick != nil {
 			if isBuiltInSelector(selector) {
 				errPick = restoreModelCooldownErrorModel(errPick, model)
@@ -2434,11 +2466,12 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 			m.warnLogAuthUnavailable(ctx, providers, model, opts, tried, errPick)
 			return nil, nil, "", errPick
 		}
-		if selected != nil {
-			selected = pickSchedulerAuthByID(selectorAuths, selected.ID)
-			if selected == nil {
-				return nil, nil, "", &Error{Code: "auth_not_found", Message: "selector returned an ineligible auth"}
-			}
+		if selected == nil {
+			return nil, nil, "", &Error{Code: "auth_not_found", Message: "selector returned no auth"}
+		}
+		selected = pickSchedulerAuthByID(selectorAuths, selected.ID)
+		if selected == nil {
+			return nil, nil, "", &Error{Code: "auth_not_found", Message: "selector returned an ineligible auth"}
 		}
 	}
 	if selected == nil {
