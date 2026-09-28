@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
-	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/store"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	log "github.com/sirupsen/logrus"
 )
 

@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/billing"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/store"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/store"
 )
 
 // Store is the persistence surface required by the portal handlers. The
