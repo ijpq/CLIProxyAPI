@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	"golang.org/x/net/context"
 )
 

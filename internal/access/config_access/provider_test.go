@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 )
 
 func TestProviderRevalidatesDelegatedConfigKey(t *testing.T) {
