@@ -4,8 +4,11 @@
 package codex
 
 import (
+	"context"
+	"crypto/x509"
+	"fmt"
+	"net"
 	"net/http"
-	"strings"
 	"sync"
 
 	tls "github.com/refraction-networking/utls"
@@ -16,20 +19,55 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// utlsH2Conn is the subset of an HTTP/2 client connection the round tripper
-// needs. It is satisfied by *chromeh2.Conn.
-type utlsH2Conn interface {
+// utlsConn is the subset of a negotiated HTTP connection the round tripper
+// needs. It is satisfied by *chromeh2.Conn and the HTTP/1.1 fallback.
+type utlsConn interface {
 	CanTakeNewRequest() bool
 	RoundTrip(*http.Request) (*http.Response, error)
+}
+
+// utlsHTTP1Conn adapts an already-handshaken uTLS connection to net/http. OAuth
+// requests are infrequent, so the fallback deliberately uses one connection per
+// request instead of maintaining a second connection pool.
+type utlsHTTP1Conn struct {
+	mu        sync.Mutex
+	conn      net.Conn
+	transport *http.Transport
+	used      bool
+}
+
+func newUtlsHTTP1Conn(conn net.Conn) *utlsHTTP1Conn {
+	cc := &utlsHTTP1Conn{conn: conn}
+	cc.transport = &http.Transport{
+		DisableKeepAlives: true,
+		DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
+			cc.mu.Lock()
+			defer cc.mu.Unlock()
+			if cc.used {
+				return nil, fmt.Errorf("codex utls: HTTP/1.1 connection already used")
+			}
+			cc.used = true
+			return cc.conn, nil
+		},
+	}
+	return cc
+}
+
+func (c *utlsHTTP1Conn) CanTakeNewRequest() bool { return false }
+
+func (c *utlsHTTP1Conn) RoundTrip(req *http.Request) (*http.Response, error) {
+	return c.transport.RoundTrip(req)
 }
 
 // utlsRoundTripper implements http.RoundTripper using utls with Chrome
 // fingerprint to bypass Cloudflare's TLS fingerprinting on OpenAI domains.
 type utlsRoundTripper struct {
-	mu          sync.Mutex
-	connections map[string]utlsH2Conn
-	pending     map[string]*sync.Cond
-	dialer      proxy.Dialer
+	mu                 sync.Mutex
+	connections        map[string]utlsConn
+	pending            map[string]*sync.Cond
+	dialer             proxy.Dialer
+	rootCAs            *x509.CertPool
+	insecureSkipVerify bool
 }
 
 func newUtlsRoundTripper(cfg *config.SDKConfig) *utlsRoundTripper {
@@ -42,14 +80,24 @@ func newUtlsRoundTripper(cfg *config.SDKConfig) *utlsRoundTripper {
 			dialer = proxyDialer
 		}
 	}
+
+	var rootCAs *x509.CertPool
+	var insecureSkipVerify bool
+	if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok && defaultTransport != nil && defaultTransport.TLSClientConfig != nil {
+		rootCAs = defaultTransport.TLSClientConfig.RootCAs
+		insecureSkipVerify = defaultTransport.TLSClientConfig.InsecureSkipVerify
+	}
+
 	return &utlsRoundTripper{
-		connections: make(map[string]utlsH2Conn),
-		pending:     make(map[string]*sync.Cond),
-		dialer:      dialer,
+		connections:        make(map[string]utlsConn),
+		pending:            make(map[string]*sync.Cond),
+		dialer:             dialer,
+		rootCAs:            rootCAs,
+		insecureSkipVerify: insecureSkipVerify,
 	}
 }
 
-func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (utlsH2Conn, error) {
+func (t *utlsRoundTripper) getOrCreateConnection(ctx context.Context, host, addr string) (utlsConn, error) {
 	t.mu.Lock()
 
 	if cc, ok := t.connections[host]; ok && cc.CanTakeNewRequest() {
@@ -69,7 +117,7 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (utlsH2Conn,
 	t.pending[host] = cond
 	t.mu.Unlock()
 
-	cc, err := t.createConnection(host, addr)
+	cc, err := t.createConnection(ctx, host, addr)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -81,45 +129,68 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (utlsH2Conn,
 		return nil, err
 	}
 
-	t.connections[host] = cc
+	if cc.CanTakeNewRequest() {
+		t.connections[host] = cc
+	} else {
+		delete(t.connections, host)
+	}
 	return cc, nil
 }
 
-func (t *utlsRoundTripper) createConnection(host, addr string) (utlsH2Conn, error) {
-	conn, err := t.dialer.Dial("tcp", addr)
+func (t *utlsRoundTripper) createConnection(ctx context.Context, host, addr string) (utlsConn, error) {
+	var (
+		conn net.Conn
+		err  error
+	)
+	if contextDialer, ok := t.dialer.(proxy.ContextDialer); ok {
+		conn, err = contextDialer.DialContext(ctx, "tcp", addr)
+	} else {
+		conn, err = t.dialer.Dial("tcp", addr)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	tlsConfig := &tls.Config{ServerName: host}
+	tlsConfig := &tls.Config{
+		ServerName:         host,
+		RootCAs:            t.rootCAs,
+		InsecureSkipVerify: t.insecureSkipVerify,
+		NextProtos:         []string{"h2", "http/1.1"},
+	}
 	tlsConn := tls.UClient(conn, tlsConfig, tls.HelloChrome_Auto)
 
-	if err := tlsConn.Handshake(); err != nil {
+	if err = tlsConn.HandshakeContext(ctx); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
 
-	// Use the Chrome-aligned HTTP/2 layer so the OAuth token exchange/refresh
-	// against auth.openai.com presents a Chrome TLS hello AND a Chrome HTTP/2
-	// fingerprint, rather than Chrome TLS over Go's standard HTTP/2.
-	cc, err := chromeh2.NewConn(tlsConn)
-	if err != nil {
+	switch protocol := tlsConn.ConnectionState().NegotiatedProtocol; protocol {
+	case "h2":
+		// Use the Chrome-aligned HTTP/2 layer so the OAuth token exchange/refresh
+		// presents a Chrome TLS hello and Chrome HTTP/2 fingerprint together.
+		cc, errCreate := chromeh2.NewConn(tlsConn)
+		if errCreate != nil {
+			_ = tlsConn.Close()
+			return nil, errCreate
+		}
+		return cc, nil
+	case "", "http/1.1":
+		return newUtlsHTTP1Conn(tlsConn), nil
+	default:
 		_ = tlsConn.Close()
-		return nil, err
+		return nil, fmt.Errorf("codex utls: unsupported negotiated protocol %q", protocol)
 	}
-
-	return cc, nil
 }
 
 func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	host := req.URL.Host
-	addr := host
-	if !strings.Contains(addr, ":") {
-		addr += ":443"
-	}
 	hostname := req.URL.Hostname()
+	port := req.URL.Port()
+	if port == "" {
+		port = "443"
+	}
+	addr := net.JoinHostPort(hostname, port)
 
-	cc, err := t.getOrCreateConnection(hostname, addr)
+	cc, err := t.getOrCreateConnection(req.Context(), hostname, addr)
 	if err != nil {
 		return nil, err
 	}
