@@ -751,6 +751,10 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				shouldReplayResponsesWebsocketPinnedAuthFailure(errMsg)
 		}
 
+		var turnLocalInterrupt *responsesLocalInterrupt
+		if attemptedUpstreamMode == responsesWebsocketUpstreamModeHTTP {
+			turnLocalInterrupt = localInterrupt
+		}
 		completedOutput, completedResponseID, completedPendingToolCallIDs, forwardErrMsg, errForward := h.forwardResponsesWebsocket(
 			c,
 			writer,
@@ -764,7 +768,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				duplexStream:             codexDuplexStream.Load,
 				toolCacheTurn:            toolCacheTurn,
 				suppressError:            replayPinnedAuthFailure,
-				localInterrupt:           localInterrupt,
+				localInterrupt:           turnLocalInterrupt,
 			},
 		)
 		if errForward != nil {
