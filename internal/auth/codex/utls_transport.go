@@ -66,18 +66,27 @@ type utlsRoundTripper struct {
 	connections        map[string]utlsConn
 	pending            map[string]*sync.Cond
 	dialer             proxy.Dialer
+	httpTransport      http.RoundTripper
 	rootCAs            *x509.CertPool
 	insecureSkipVerify bool
 }
 
 func newUtlsRoundTripper(cfg *config.SDKConfig) *utlsRoundTripper {
 	var dialer proxy.Dialer = proxy.Direct
+	var httpTransport http.RoundTripper = http.DefaultTransport
 	if cfg != nil {
 		proxyDialer, mode, errBuild := proxyutil.BuildDialer(cfg.ProxyURL)
 		if errBuild != nil {
 			log.Errorf("codex utls: failed to configure proxy dialer for %q: %v", cfg.ProxyURL, errBuild)
 		} else if mode != proxyutil.ModeInherit && proxyDialer != nil {
 			dialer = proxyDialer
+		}
+
+		plainTransport, plainMode, errPlain := proxyutil.BuildHTTPTransport(cfg.ProxyURL)
+		if errPlain != nil {
+			log.Errorf("codex utls: failed to configure HTTP transport for %q: %v", cfg.ProxyURL, errPlain)
+		} else if plainMode != proxyutil.ModeInherit && plainTransport != nil {
+			httpTransport = plainTransport
 		}
 	}
 
@@ -92,6 +101,7 @@ func newUtlsRoundTripper(cfg *config.SDKConfig) *utlsRoundTripper {
 		connections:        make(map[string]utlsConn),
 		pending:            make(map[string]*sync.Cond),
 		dialer:             dialer,
+		httpTransport:      httpTransport,
 		rootCAs:            rootCAs,
 		insecureSkipVerify: insecureSkipVerify,
 	}
@@ -183,6 +193,16 @@ func (t *utlsRoundTripper) createConnection(ctx context.Context, host, addr stri
 }
 
 func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil || req.URL == nil {
+		return nil, fmt.Errorf("codex utls: request URL is required")
+	}
+	if req.URL.Scheme != "https" {
+		if req.URL.Scheme != "http" {
+			return nil, fmt.Errorf("codex utls: unsupported URL scheme %q", req.URL.Scheme)
+		}
+		return t.httpTransport.RoundTrip(req)
+	}
+
 	hostname := req.URL.Hostname()
 	port := req.URL.Port()
 	if port == "" {

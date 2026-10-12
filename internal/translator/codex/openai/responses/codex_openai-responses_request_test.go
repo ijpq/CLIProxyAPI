@@ -553,7 +553,7 @@ func TestContextManagementCompactionForwarded(t *testing.T) {
 // carry no context_management) are unaffected by the compaction fix.
 func TestNormalRequestHasNoContextManagement(t *testing.T) {
 	inputJSON := []byte(`{"model":"gpt-5.2","input":[{"role":"user","content":"hello"}]}`)
-	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	output, _ := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
 	if gjson.GetBytes(output, "context_management").Exists() {
 		t.Fatalf("context_management must not be injected into normal requests")
 	}
