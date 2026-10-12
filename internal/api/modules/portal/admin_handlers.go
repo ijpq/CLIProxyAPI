@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/store"
+	log "github.com/sirupsen/logrus"
 )
 
 type adminAliasRequest struct {
@@ -187,11 +188,13 @@ func (m *Module) handleUsageStats(c *gin.Context) {
 	}
 	daily, err := m.store.AggregateUsageByDay(c.Request.Context(), userID, days)
 	if err != nil {
+		log.WithError(err).Error("portal usage stats: aggregate daily usage")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "daily stats failed"})
 		return
 	}
 	byModel, err := m.store.AggregateUsageByModel(c.Request.Context(), userID, days)
 	if err != nil {
+		log.WithError(err).Error("portal usage stats: aggregate model usage")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "model stats failed"})
 		return
 	}

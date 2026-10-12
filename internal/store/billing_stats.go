@@ -40,7 +40,7 @@ func (s *PostgresStore) AggregateUsageByDay(ctx context.Context, userID string, 
 		SELECT d::date::text AS date,
 		       COALESCE(SUM(u.cost),0)::text AS cost,
 		       COUNT(u.id) AS requests
-		FROM generate_series(NOW() - ($1||' days')::interval, NOW(), '1 day') d
+		FROM generate_series(NOW() - make_interval(days => $1), NOW(), '1 day') d
 		LEFT JOIN %s u ON u.created_at::date = d::date %s
 		GROUP BY d::date
 		ORDER BY d::date ASC
@@ -84,7 +84,7 @@ func (s *PostgresStore) AggregateUsageByModel(ctx context.Context, userID string
 		       SUM(input_tokens) AS input_tokens,
 		       SUM(output_tokens) AS output_tokens
 		FROM %s
-		WHERE created_at >= NOW() - ($1||' days')::interval %s
+		WHERE created_at >= NOW() - make_interval(days => $1) %s
 		GROUP BY model
 		ORDER BY SUM(cost) DESC
 		LIMIT 50
