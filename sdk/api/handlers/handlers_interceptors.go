@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
+	claudemodels "github.com/router-for-me/CLIProxyAPI/v8/internal/client/claude/models"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -632,6 +635,59 @@ func (h *BaseAPIHandler) applyResponseInterceptors(ctx context.Context, requestI
 // ModelDetailIDContextKey requests selection from the final, plugin-filtered catalog.
 const ModelDetailIDContextKey = "cliproxy.model_detail_id"
 
+func filterAllowedModelListResponse(ctx context.Context, body []byte) ([]byte, error) {
+	if len(billing.AllowedModelsFromContext(ctx)) == 0 {
+		return body, nil
+	}
+	var catalog map[string]json.RawMessage
+	if errUnmarshal := json.Unmarshal(body, &catalog); errUnmarshal != nil {
+		return nil, errUnmarshal
+	}
+	filteredAny := false
+	for _, field := range []string{"data", "models"} {
+		raw, ok := catalog[field]
+		if !ok {
+			continue
+		}
+		var entries []json.RawMessage
+		if errUnmarshal := json.Unmarshal(raw, &entries); errUnmarshal != nil {
+			return nil, errUnmarshal
+		}
+		filtered := make([]json.RawMessage, 0, len(entries))
+		for _, entry := range entries {
+			var identity struct {
+				ID   string `json:"id"`
+				Slug string `json:"slug"`
+				Name string `json:"name"`
+			}
+			if errUnmarshal := json.Unmarshal(entry, &identity); errUnmarshal != nil {
+				continue
+			}
+			modelID := identity.ID
+			if modelID == "" {
+				modelID = identity.Slug
+			}
+			if modelID == "" {
+				modelID = strings.TrimPrefix(identity.Name, "models/")
+			}
+			modelID = claudemodels.ResolveClaudeModelIDPrefix(modelID)
+			if billing.ModelAllowed(ctx, modelID) {
+				filtered = append(filtered, entry)
+			}
+		}
+		encoded, errMarshal := json.Marshal(filtered)
+		if errMarshal != nil {
+			return nil, errMarshal
+		}
+		catalog[field] = encoded
+		filteredAny = true
+	}
+	if !filteredAny {
+		return nil, fmt.Errorf("model catalog has no data or models field")
+	}
+	return json.Marshal(catalog)
+}
+
 // WriteModelListResponse serializes the model-list payload, applies plugin response interceptors
 // if a plugin host is configured, and writes the resulting headers and body to the Gin context.
 func (h *BaseAPIHandler) WriteModelListResponse(c *gin.Context, sourceFormat string, payload any) {
@@ -690,6 +746,18 @@ func (h *BaseAPIHandler) WriteModelListResponse(c *gin.Context, sourceFormat str
 			}
 		}
 	}
+
+	responseCtx := context.Background()
+	if c.Request != nil {
+		responseCtx = c.Request.Context()
+	}
+	filteredBody, errFilter := filterAllowedModelListResponse(responseCtx, body)
+	if errFilter != nil {
+		lifecycle.complete(pluginapi.RequestCompletionFailed, http.StatusBadGateway, errFilter)
+		c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"message": "Invalid model catalog", "type": "api_error"}})
+		return
+	}
+	body = filteredBody
 
 	if modelID, detail := c.Get(ModelDetailIDContextKey); detail {
 		c.Writer.Header().Del("Content-Length")

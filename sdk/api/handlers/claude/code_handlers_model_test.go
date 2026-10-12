@@ -1,11 +1,14 @@
 package claude
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
@@ -45,6 +48,40 @@ func TestClaudeModelsResponseUsesConfiguredDisplayName(t *testing.T) {
 		}
 	}
 	t.Fatalf("model %q not found in response", modelID)
+}
+
+func TestClaudeModelsFiltersBillingAllowlist(t *testing.T) {
+	const (
+		clientID      = "claude-billing-model-list-test"
+		allowedModel  = "claude-billing-visible-model"
+		filteredModel = "claude-billing-hidden-model"
+	)
+	registryRef := registry.GetGlobalRegistry()
+	registryRef.RegisterClient(clientID, "claude", []*registry.ModelInfo{
+		{ID: allowedModel, Object: "model", OwnedBy: "test"},
+		{ID: filteredModel, Object: "model", OwnedBy: "test"},
+	})
+	t.Cleanup(func() {
+		registryRef.UnregisterClient(clientID)
+	})
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	requestCtx := billing.WithAllowedModels(context.Background(), []string{allowedModel + "(high)"})
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil).WithContext(requestCtx)
+	NewClaudeCodeAPIHandler(&handlers.BaseAPIHandler{}).ClaudeModels(ctx)
+
+	var response struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if errUnmarshal := json.Unmarshal(recorder.Body.Bytes(), &response); errUnmarshal != nil {
+		t.Fatalf("decode response: %v", errUnmarshal)
+	}
+	if len(response.Data) != 1 || response.Data[0].ID != allowedModel {
+		t.Fatalf("listed models = %#v, want only %q", response.Data, allowedModel)
+	}
 }
 
 func TestClaudeModelsResponseDisablesModelListCloaking(t *testing.T) {

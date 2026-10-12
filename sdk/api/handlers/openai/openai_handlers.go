@@ -12,9 +12,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
 	codexmodels "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/models"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	. "github.com/router-for-me/CLIProxyAPI/v8/internal/constant"
@@ -62,9 +64,10 @@ func (h *OpenAIAPIHandler) Models() []map[string]any {
 // It returns a list of available AI models with their capabilities
 // and specifications in OpenAI-compatible format.
 func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
+	allModels := filterAllowedModelMaps(c.Request.Context(), h.Models(), "id")
 	if _, ok := c.Request.URL.Query()["client_version"]; ok {
 		clientVersion := c.Query("client_version")
-		body, errMarshal := codexmodels.MarshalCompact(h.codexClientModelsResponse(clientVersion))
+		body, errMarshal := codexmodels.MarshalCompact(h.codexClientModelsResponseFrom(allModels, clientVersion))
 		if errMarshal != nil {
 			c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
 				Error: handlers.ErrorDetail{
@@ -77,9 +80,6 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 		h.WriteModelListResponse(c, h.HandlerType(), body)
 		return
 	}
-
-	// Get all available models
-	allModels := h.Models()
 
 	// Filter to only include the 4 required fields: id, object, created, owned_by
 	filteredModels := make([]map[string]any, len(allModels))
@@ -106,6 +106,21 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 		"object": "list",
 		"data":   filteredModels,
 	})
+}
+
+func filterAllowedModelMaps(ctx context.Context, models []map[string]any, idField string) []map[string]any {
+	if len(billing.AllowedModelsFromContext(ctx)) == 0 {
+		return models
+	}
+	filtered := make([]map[string]any, 0, len(models))
+	for _, model := range models {
+		id, _ := model[idField].(string)
+		id = strings.TrimPrefix(strings.TrimSpace(id), "models/")
+		if billing.ModelAllowed(ctx, id) {
+			filtered = append(filtered, model)
+		}
+	}
+	return filtered
 }
 
 // ChatCompletions handles the /v1/chat/completions endpoint.

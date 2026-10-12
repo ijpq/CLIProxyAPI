@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/client/grokbuild"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
@@ -185,6 +187,26 @@ func TestGrokHomeModelAdapterOmitsReasoning(t *testing.T) {
 	}
 	if _, exists := wireResponse.Data[1]["reasoning_efforts"]; exists {
 		t.Fatalf("zero-context Home model contains omitted reasoning_efforts: %s", wire)
+	}
+}
+
+func TestHomeAndGrokModelFiltersApplyBillingAllowlist(t *testing.T) {
+	requestCtx := billing.WithAllowedModels(context.Background(), []string{"visible-model(high)"})
+
+	homeEntries := filterAllowedHomeModelEntries(requestCtx, []homeModelEntry{
+		{id: "visible-model"},
+		{id: "hidden-model"},
+	})
+	if len(homeEntries) != 1 || homeEntries[0].id != "visible-model" {
+		t.Fatalf("Home entries = %#v, want only visible-model", homeEntries)
+	}
+
+	grokModels := filterAllowedGrokModels(requestCtx, []grokbuild.ModelInfo{
+		{ID: "visible-model"},
+		{ID: "hidden-model"},
+	})
+	if len(grokModels) != 1 || grokModels[0].ID != "visible-model" {
+		t.Fatalf("Grok models = %#v, want only visible-model", grokModels)
 	}
 }
 

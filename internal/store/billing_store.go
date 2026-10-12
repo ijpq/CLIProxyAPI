@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // APIKeyLookup is the subset of api_key columns needed to authenticate a request
@@ -55,6 +58,8 @@ func DecodeAuthIDs(raw string) []string {
 // not match any active row (unknown or revoked).
 var ErrAPIKeyNotFound = errors.New("postgres store: api key not found")
 
+const slowAPIKeyLookupThreshold = time.Second
+
 // HashAPIKey hashes a raw API key using SHA-256 and returns the lowercase hex
 // digest. Callers store and compare keys exclusively through this digest so the
 // plaintext key value is never persisted.
@@ -87,6 +92,23 @@ func (s *PostgresStore) lookupAPIKey(ctx context.Context, column, value string) 
 	if s == nil || s.db == nil {
 		return APIKeyLookup{}, fmt.Errorf("postgres store: not initialized")
 	}
+	startedAt := time.Now()
+	defer func() {
+		duration := time.Since(startedAt)
+		if duration < slowAPIKeyLookupThreshold {
+			return
+		}
+		stats := s.db.Stats()
+		log.WithFields(log.Fields{
+			"duration_ms":          duration.Milliseconds(),
+			"max_open_connections": stats.MaxOpenConnections,
+			"open_connections":     stats.OpenConnections,
+			"in_use":               stats.InUse,
+			"idle":                 stats.Idle,
+			"wait_count":           stats.WaitCount,
+			"wait_duration_ms":     stats.WaitDuration.Milliseconds(),
+		}).Warn("postgres store: slow API key lookup")
+	}()
 	query := fmt.Sprintf(
 		`SELECT k.id, k.user_id, u.unbilled, u.allowed_models, u.allowed_auth_ids
 		 FROM %s k JOIN %s u ON u.id = k.user_id
