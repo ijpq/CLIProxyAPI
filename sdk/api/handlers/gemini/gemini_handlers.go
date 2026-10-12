@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	. "github.com/router-for-me/CLIProxyAPI/v8/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
@@ -49,10 +50,18 @@ func (h *GeminiAPIHandler) Models() []map[string]any {
 // GeminiModels handles the Gemini models listing endpoint.
 // It returns a JSON response containing available Gemini models and their specifications.
 func (h *GeminiAPIHandler) GeminiModels(c *gin.Context) {
+	requestCtx := context.Background()
+	if c != nil && c.Request != nil {
+		requestCtx = c.Request.Context()
+	}
 	rawModels := h.Models()
 	normalizedModels := make([]map[string]any, 0, len(rawModels))
 	defaultMethods := []string{"generateContent"}
 	for _, model := range rawModels {
+		name, _ := model["name"].(string)
+		if !billing.ModelAllowed(requestCtx, strings.TrimPrefix(strings.TrimSpace(name), "models/")) {
+			continue
+		}
 		normalizedModel := make(map[string]any, len(model))
 		for k, v := range model {
 			normalizedModel[k] = v
@@ -101,6 +110,9 @@ func (h *GeminiAPIHandler) GeminiGetHandler(c *gin.Context) {
 
 	for _, model := range availableModels {
 		name, _ := model["name"].(string)
+		if !billing.ModelAllowed(c.Request.Context(), strings.TrimPrefix(strings.TrimSpace(name), "models/")) {
+			continue
+		}
 		// Match name with or without 'models/' prefix
 		if name == action || name == "models/"+action {
 			targetModel = model

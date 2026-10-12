@@ -321,7 +321,7 @@ USDT 充值在链上自动确认，无需手动操作。
 ### 5.2 强制逻辑
 
 - **免余额**：`unbilled` 用户的请求跳过 `BILLING_BALANCE_THRESHOLD`，计量时**不扣钱包**（用量照记）；默认仍受限流，除非 `BILLING_UNBILLED_BYPASS_RATE_LIMIT=true`。
-- **限模型**：客户请求一个不在 `allowed_models` 里的模型 → 直接 **403**（`model not allowed for this account`）。HTTP、SSE、WebSocket、Home 和插件路由都会在实际执行前检查；`model(high)` 等 thinking 后缀按基础模型匹配。
+- **限模型**：客户请求一个不在 `allowed_models` 里的模型 → 直接 **403**（`model not allowed for this account`）。HTTP、SSE、WebSocket、Home 和插件路由都会在实际执行前检查；`model(high)` 等 thinking 后缀按基础模型匹配。模型目录接口（OpenAI/Claude/Codex/Gemini/Home/Grok 格式）也只返回白名单内的模型，避免客户端展示无权调用的条目。
 - **限账号**：把候选上游账号收窄到 `allowed_auth_ids`，再由 CLIProxy 自身的**轮询 / fill-first** 在其中调度（1 个=固定，多个=负载均衡）。传统选择器、新调度器快速路径和 Home 路由都应用同一白名单；无法映射到具体认证文件的插件执行器会拒绝受限请求。
 - **配置校验**：提交不存在的模型或认证文件时，管理 API 返回 **400**，不会把无效选择静默保存成“无限制”。
 
@@ -332,6 +332,14 @@ USDT 充值在链上自动确认，无需手动操作。
 ### 5.3 审计日志
 
 每条用量记录都写入实际服务它的上游账号（`auth_id`/`auth_label`），在「用量明细」的「账号」列可见；`unbilled` 请求还会打一条 `billing: unbilled request served`（含用户/账号/provider/model）。→ 谁用了哪个账号的额度可追溯。
+
+---
+
+### 5.4 请求日志与 commercial mode
+
+`server.commercial-mode: true` 会在进程启动时完全跳过 `RequestLoggingMiddleware`，用于降低高并发时的内存和 I/O 开销。此模式下，即使运行时把 `observability.logs.request-log` 改为 `true`，也不能补装已经省略的 middleware，必须把 `commercial-mode` 设为 `false` 并重启进程后才会创建请求日志。
+
+请求日志可能包含原始请求和响应内容。生产环境如无明确审计需求，建议保持 `commercial-mode: true` 与 `request-log: false`；如确需启用，必须先确认管理路由受 Cloudflare Access 或可信内网保护、日志目录权限已收紧，并设置清理上限。
 
 ---
 
