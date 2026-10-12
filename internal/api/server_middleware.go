@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/live"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
@@ -236,30 +238,52 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 			return
 		}
 
-		statusCode := err.HTTPStatusCode()
+		statusCode, message := authenticationErrorStatus(err)
 		if statusCode >= http.StatusInternalServerError {
 			log.Errorf("authentication middleware error: %v", err)
 		}
 		if realtimeError {
 			errorType := "authentication_error"
 			code := "invalid_api_key"
-			if statusCode == http.StatusRequestEntityTooLarge {
+			switch statusCode {
+			case http.StatusRequestEntityTooLarge:
 				errorType = "invalid_request_error"
 				code = "request_body_too_large"
-			} else if statusCode >= http.StatusInternalServerError {
+			case clienterror.StatusClientClosedRequest:
+				errorType = "request_error"
+				code = "request_canceled"
+			case http.StatusGatewayTimeout:
 				errorType = "server_error"
-				code = "authentication_service_error"
+				code = "authentication_timeout"
+			default:
+				if statusCode >= http.StatusInternalServerError {
+					errorType = "server_error"
+					code = "authentication_service_error"
+				}
 			}
 			c.AbortWithStatusJSON(statusCode, gin.H{"error": gin.H{
-				"message": err.Message,
+				"message": message,
 				"type":    errorType,
 				"param":   nil,
 				"code":    code,
 			}})
 			return
 		}
-		c.AbortWithStatusJSON(statusCode, gin.H{"error": err.Message})
+		c.AbortWithStatusJSON(statusCode, gin.H{"error": message})
 	}
+}
+
+func authenticationErrorStatus(authErr *sdkaccess.AuthError) (int, string) {
+	if errors.Is(authErr, context.Canceled) {
+		return clienterror.StatusClientClosedRequest, "Request canceled"
+	}
+	if errors.Is(authErr, context.DeadlineExceeded) {
+		return http.StatusGatewayTimeout, "Authentication request timed out"
+	}
+	if authErr == nil {
+		return http.StatusInternalServerError, "Authentication service error"
+	}
+	return authErr.HTTPStatusCode(), authErr.Message
 }
 
 func realtimeAuthMiddleware(manager *sdkaccess.Manager, handler *codexlive.Handler) gin.HandlerFunc {

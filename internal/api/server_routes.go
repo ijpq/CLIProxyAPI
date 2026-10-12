@@ -681,7 +681,21 @@ func (s *Server) handleGrokModels(c *gin.Context) {
 	} else {
 		models = grokModelsFromRegistryInfos(registry.GetGlobalRegistry().GetAvailableModelInfos())
 	}
+	models = filterAllowedGrokModels(c.Request.Context(), models)
 	s.writeModelListResponse(c, "openai", grokbuild.BuildResponse(models))
+}
+
+func filterAllowedGrokModels(ctx context.Context, models []grokbuild.ModelInfo) []grokbuild.ModelInfo {
+	if len(billing.AllowedModelsFromContext(ctx)) == 0 {
+		return models
+	}
+	filtered := make([]grokbuild.ModelInfo, 0, len(models))
+	for _, model := range models {
+		if billing.ModelAllowed(ctx, model.ID) {
+			filtered = append(filtered, model)
+		}
+	}
+	return filtered
 }
 
 func (s *Server) writeModelListResponse(c *gin.Context, sourceFormat string, payload any) {
@@ -883,6 +897,19 @@ func (s *Server) geminiGetHandler(geminiHandler *gemini.GeminiAPIHandler) gin.Ha
 	}
 }
 
+func filterAllowedHomeModelEntries(ctx context.Context, entries []homeModelEntry) []homeModelEntry {
+	if len(billing.AllowedModelsFromContext(ctx)) == 0 {
+		return entries
+	}
+	filtered := make([]homeModelEntry, 0, len(entries))
+	for _, entry := range entries {
+		if billing.ModelAllowed(ctx, entry.id) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
 type homeModelEntry struct {
 	id                     string
 	created                int64
@@ -1046,8 +1073,7 @@ func (s *Server) loadHomeModelEntries(c *gin.Context) ([]homeModelEntry, bool) {
 		})
 		return nil, false
 	}
-
-	return entries, true
+	return filterAllowedHomeModelEntries(c.Request.Context(), entries), true
 }
 
 func formatHomeGeminiModels(entries []homeModelEntry) []map[string]any {

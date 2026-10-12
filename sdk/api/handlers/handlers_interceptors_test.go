@@ -13,6 +13,7 @@ import (
 	"unsafe"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
@@ -1692,6 +1693,39 @@ func TestWriteModelListResponse_ExposesResponseToPluginInterceptors(t *testing.T
 	}
 	if apiResp, ok := ctx.Get("API_RESPONSE"); !ok || !strings.Contains(string(apiResp.([]byte)), "intercepted-model") {
 		t.Fatalf("API_RESPONSE not recorded properly: %#v", apiResp)
+	}
+}
+
+func TestWriteModelListResponse_AppliesBillingFilterAfterPluginInterceptors(t *testing.T) {
+	handler := &BaseAPIHandler{}
+	handler.SetPluginHost(&handlerInterceptorTestHost{
+		interceptResponse: func(_ context.Context, req pluginapi.ResponseInterceptRequest) pluginapi.ResponseInterceptResponse {
+			return pluginapi.ResponseInterceptResponse{
+				Headers: req.ResponseHeaders,
+				Body:    []byte(`{"object":"list","data":[{"id":"allowed-model"},{"id":"plugin-hidden-model"}]}`),
+			}
+		},
+	})
+
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	requestCtx := billing.WithAllowedModels(context.Background(), []string{"allowed-model"})
+	ginCtx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil).WithContext(requestCtx)
+	handler.WriteModelListResponse(ginCtx, "openai", gin.H{
+		"object": "list",
+		"data":   []map[string]any{{"id": "original-hidden-model"}},
+	})
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("code = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(recorder.Body.String(), "allowed-model") {
+		t.Fatalf("body = %s, want allowed-model", recorder.Body.String())
+	}
+	for _, hidden := range []string{"plugin-hidden-model", "original-hidden-model"} {
+		if strings.Contains(recorder.Body.String(), hidden) {
+			t.Fatalf("body = %s, unexpectedly contains %s", recorder.Body.String(), hidden)
+		}
 	}
 }
 
