@@ -29,6 +29,8 @@ type rejectSecondBindLifecycle struct {
 	binds atomic.Int32
 }
 
+type retryBindConnectionOrderKey struct{}
+
 func (l *rejectSecondBindLifecycle) Bind(func() error) error {
 	if l.binds.Add(1) > 1 {
 		return fmt.Errorf("retry lifecycle bind rejected")
@@ -231,17 +233,13 @@ func TestWebsocketRetryBindFailureClearsActiveSessionState(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 			var connections atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Numbered before Upgrade: the client dials the next connection only
-				// after this handshake completed, so numbers follow dial order.
-				// Counted after Upgrade, a slow handler could be overtaken by the
-				// next connection's and the two would swap roles.
-				connection := connections.Add(1)
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn, errUpgrade := upgrader.Upgrade(w, r, nil)
 				if errUpgrade != nil {
 					t.Errorf("upgrade websocket: %v", errUpgrade)
 					return
 				}
+				connection, _ := r.Context().Value(retryBindConnectionOrderKey{}).(int32)
 				defer func() { _ = conn.Close() }()
 				if connection == 1 {
 					_, _, _ = conn.ReadMessage()
@@ -258,6 +256,10 @@ func TestWebsocketRetryBindFailureClearsActiveSessionState(t *testing.T) {
 					t.Errorf("write websocket completion: %v", errWrite)
 				}
 			}))
+			server.Config.ConnContext = func(ctx context.Context, _ net.Conn) context.Context {
+				return context.WithValue(ctx, retryBindConnectionOrderKey{}, connections.Add(1))
+			}
+			server.Start()
 			defer server.Close()
 
 			lifecycle := &rejectSecondBindLifecycle{}
