@@ -163,7 +163,11 @@ func TestPortalKeyPolicyCatalogEnforcementAndUpdates(t *testing.T) {
 	check("public-b")
 	w = f.request(t, "GET", "/api-key-models", token, nil)
 	requirePortalStatus(t, w, 200)
-	if w.Body.String() != `{"models":["public-b"]}` {
+	catalog := decodePortal[struct {
+		Models []string           `json:"models"`
+		Prices []store.PointPrice `json:"prices"`
+	}](t, w)
+	if len(catalog.Models) != 1 || catalog.Models[0] != "public-b" || len(catalog.Prices) != 1 || catalog.Prices[0].Model != "public-b" {
 		t.Fatal(w.Body.String())
 	}
 	requirePortalStatus(t, f.request(t, "PUT", path, token, gin.H{"model_scope": "selected", "allowed_models": []string{"public-a"}}), 200)
