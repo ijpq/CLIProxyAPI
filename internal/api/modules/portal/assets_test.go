@@ -8,14 +8,21 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestPortalServesProductionScripts(t *testing.T) {
+func TestPortalServesProductionAssets(t *testing.T) {
 	router := gin.New()
 	New(nil, nil, nil).RegisterRoutes(router.Group("/portal"))
-	for _, name := range []string{"app.js", "docs.js"} {
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, httptest.NewRequest("GET", "/portal/ui/"+name, nil))
-		if w.Code != 200 || !strings.Contains(w.Header().Get("Content-Type"), "javascript") || w.Body.Len() == 0 {
-			t.Fatalf("script %s was not served: %d %s", name, w.Code, w.Header().Get("Content-Type"))
+	for _, asset := range []struct{ name, contentType, contains string }{
+		{"app.js", "javascript", "function"},
+		{"docs.js", "javascript", "fetch("},
+		{"portal.css", "text/css", `url("InterVariable.woff2")`},
+		{"InterVariable.woff2", "font/woff2", "wOF2"},
+	} {
+		for _, prefix := range []string{"/portal/ui/", "/portal/site/"} {
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest("GET", prefix+asset.name, nil))
+			if w.Code != 200 || !strings.Contains(w.Header().Get("Content-Type"), asset.contentType) || !strings.Contains(w.Body.String(), asset.contains) {
+				t.Fatalf("asset %s%s was not served correctly: %d %s", prefix, asset.name, w.Code, w.Header().Get("Content-Type"))
+			}
 		}
 	}
 }

@@ -69,6 +69,10 @@ func (m *Module) handleSiteAsset(c *gin.Context) {
 	case "index.html", "docs.html":
 		contentType = "text/html; charset=utf-8"
 	case "app.js", "docs.js":
+	case "portal.css":
+		contentType = "text/css; charset=utf-8"
+	case "InterVariable.woff2":
+		contentType = "font/woff2"
 	default:
 		c.Status(http.StatusNotFound)
 		return
@@ -81,6 +85,7 @@ func (m *Module) handleSiteAsset(c *gin.Context) {
 	if contentType == "text/html; charset=utf-8" {
 		html := strings.ReplaceAll(string(data), `src="app.js"`, `src="/assets/app.js"`)
 		html = strings.ReplaceAll(html, `src="docs.js"`, `src="/assets/docs.js"`)
+		html = strings.ReplaceAll(html, `href="portal.css"`, `href="/api/portal/site/portal.css"`)
 		data = []byte(html)
 	}
 	c.Header("Cache-Control", "no-cache")

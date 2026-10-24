@@ -231,11 +231,16 @@ func TestCustomerSiteAssetsAndPrivateUIKeepSeparatePaths(t *testing.T) {
 		contains    string
 	}{
 		{"portal.example.test", "index.html", 200, "/assets/app.js"},
+		{"portal.example.test", "index.html", 200, `href="/api/portal/site/portal.css"`},
 		{"portal.example.test", "docs.html", 200, "/assets/docs.js"},
+		{"portal.example.test", "docs.html", 200, `href="/api/portal/site/portal.css"`},
 		{"portal.example.test", "app.js", 200, "/api/portal"},
 		{"portal.example.test", "docs.js", 200, "/console/keys"},
+		{"portal.example.test", "portal.css", 200, `url("InterVariable.woff2")`},
+		{"portal.example.test", "InterVariable.woff2", 200, "wOF2"},
 		{"portal.example.test", "config.yaml", 404, ""},
 		{"private.example.test", "index.html", 404, ""},
+		{"private.example.test", "portal.css", 404, ""},
 	} {
 		req := httptest.NewRequest("GET", "/portal/site/"+tc.asset, nil)
 		req.Host = tc.host
@@ -257,6 +262,7 @@ func TestCustomerSiteAssetsAndPrivateUIKeepSeparatePaths(t *testing.T) {
 			`id="page-auth" class="auth-wrap"`, `id="auth-title">特权账户登录`,
 			`id="auth-home" class="btn btn-ghost hidden"`, `id="tab-register" class="tab hidden"`,
 			`src="app.js?v=`,
+			`href="portal.css"`,
 		} {
 			if !strings.Contains(w.Body.String(), expected) {
 				t.Fatalf("private login HTML missing %s", expected)
