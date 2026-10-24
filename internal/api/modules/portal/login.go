@@ -27,7 +27,7 @@ type codeVerifyRequest struct {
 
 // handlePortalConfig reports which auth methods the UI should offer. Public.
 func (m *Module) handlePortalConfig(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"email_login": m.emailLoginEnabled()})
+	c.JSON(http.StatusOK, gin.H{"email_login": m.emailLoginEnabled(), "site_mode": m.siteMode(c), "registration_enabled": m.registrationAllowed(c)})
 }
 
 // handleRequestLoginCode issues and emails a one-time login code. Public.
@@ -47,7 +47,22 @@ func (m *Module) handleRequestLoginCode(c *gin.Context) {
 		return
 	}
 
-	code, err := m.loginCodes.Generate(email)
+	if m.sitePolicy != nil {
+		user, err := m.store.GetUserByEmail(c.Request.Context(), email)
+		if errors.Is(err, store.ErrUserNotFound) {
+			if !m.registrationAllowed(c) {
+				c.JSON(http.StatusOK, gin.H{"ok": true})
+				return
+			}
+		} else if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "account lookup failed"})
+			return
+		} else if user.Status != "active" || !m.siteAllowsUser(c, user.ID) {
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+			return
+		}
+	}
+	code, err := m.loginCodes.Generate(m.loginCodeKey(c, email))
 	if err != nil {
 		if errors.Is(err, billing.ErrCodeCooldown) {
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "验证码请求过于频繁，请稍后再试"})
@@ -80,18 +95,31 @@ func (m *Module) handleVerifyLoginCode(c *gin.Context) {
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
-	if !m.loginCodes.Verify(email, req.Code) {
+	if !m.loginCodes.Verify(m.loginCodeKey(c, email), req.Code) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "验证码错误或已过期"})
 		return
 	}
 
-	user, err := m.getOrCreateUserByEmail(c.Request.Context(), email)
+	var user store.User
+	var err error
+	if m.registrationAllowed(c) {
+		user, err = m.getOrCreateUserByEmail(c.Request.Context(), email)
+	} else {
+		user, err = m.store.GetUserByEmail(c.Request.Context(), email)
+		if errors.Is(err, store.ErrUserNotFound) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "此入口不开放注册"})
+			return
+		}
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "login failed"})
 		return
 	}
 	if user.Status != "active" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "account suspended"})
+		return
+	}
+	if !m.enforceUserSite(c, user.ID) {
 		return
 	}
 	token, err := m.tokens.Issue(user.ID, user.IsAdmin)

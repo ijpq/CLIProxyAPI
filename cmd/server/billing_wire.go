@@ -105,6 +105,10 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) ([]api.Ser
 	if !billingEnabled() {
 		return nil, nil
 	}
+	sitePolicy, err := portal.NewSitePolicy(os.Getenv("BILLING_PUBLIC_PORTAL_HOST"), os.Getenv("BILLING_PRIVILEGED_PORTAL_HOST"), os.Getenv("BILLING_PRIVILEGED_USER_IDS"))
+	if err != nil {
+		return nil, err
+	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("BILLING_USDT_AUTO_CONFIRM")), "true") {
 		return nil, errors.New("billing: shared-address USDT auto-confirm cannot verify payment ownership; disable it and reconcile payments manually")
 	}
@@ -223,6 +227,7 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) ([]api.Ser
 	meter.SetLowBalanceNotifier(notifier, pg, balanceThreshold+1)
 
 	module := portal.New(pg, tokens, topupCfg)
+	module.SetSitePolicy(sitePolicy)
 	module.SetWalletChangeHook(balanceGuard.Invalidate)
 	module.SetNotifier(notifier)
 

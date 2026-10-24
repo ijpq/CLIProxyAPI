@@ -1,4 +1,26 @@
-const BASE = location.pathname.replace(/\/ui(?:\/(?:index|docs)\.html)?\/?$/, '');
+const CLEAN_ROUTES = !/\/ui(?:\/(?:index|docs)\.html)?\/?$/.test(location.pathname);
+const BASE = CLEAN_ROUTES ? '/api/portal' : location.pathname.replace(/\/ui(?:\/(?:index|docs)\.html)?\/?$/, '');
+const CONSOLE_PAGES = ['dashboard','keys','topup','usage','assistant','settings','admin','quota'];
+let siteMode = 'legacy', registrationEnabled = true;
+function pageFromLocation() {
+  if (!CLEAN_ROUTES) return location.hash.slice(1) || 'dashboard';
+  const page = location.pathname.replace(/^\/console\/?/, '');
+  return CONSOLE_PAGES.includes(page) ? page : 'dashboard';
+}
+let requestedConsolePage = pageFromLocation();
+function updateRoute(path) {
+  if (CLEAN_ROUTES && location.pathname !== path) history.pushState(null, '', path);
+}
+function documentationLink(value) {
+  return CLEAN_ROUTES ? '/docs' : safeLink(value, BASE + '/ui/docs.html');
+}
+function updateConsoleLinks() {
+  if (!CLEAN_ROUTES) return;
+  for (const link of document.querySelectorAll('a[href^="#"]')) {
+    const page = link.getAttribute('href').slice(1);
+    if (CONSOLE_PAGES.includes(page)) link.href = page === 'dashboard' ? '/console' : '/console/' + page;
+  }
+}
 let token = localStorage.getItem('portal_token');
 let isAdmin = false;
 let selectedMethod = null;
@@ -8,11 +30,14 @@ let publicSite = null, commerceSettings = null, pointPrices = [], priceVersion =
 let assistantMessages = [], assistantBusy = false, assistantReady = false;
 
 function showHome() {
+  if (siteMode === 'privileged') { showAuth('login'); return; }
+  updateRoute('/');
   document.getElementById('page-home').classList.remove('hidden');
   document.getElementById('page-auth').classList.add('hidden');
   document.getElementById('page-app').classList.add('hidden');
 }
 function showAuth(tab) {
+  if (tab === 'register' && !registrationEnabled) tab = 'login';
   document.getElementById('page-home').classList.add('hidden');
   document.getElementById('page-app').classList.add('hidden');
   document.getElementById('page-auth').classList.remove('hidden');
@@ -26,7 +51,7 @@ async function loadPublicSite() {
   try {
     publicSite = await api('/public');
     document.getElementById('site-name').textContent = publicSite.site_name || 'TrueCore AI';
-    for (const id of ['home-docs','workspace-docs','dashboard-docs']) document.getElementById(id).href = safeLink(publicSite.docs_url, BASE + '/ui/docs.html');
+    for (const id of ['home-docs','workspace-docs','dashboard-docs']) document.getElementById(id).href = documentationLink(publicSite.docs_url);
     document.getElementById('home-prices').innerHTML = (publicSite.prices || []).map(p => `<tr><td>${esc(p.model)}</td><td>${esc(p.input_per_million)}</td><td>${esc(p.output_per_million)}</td><td>${esc(p.cache_read_per_million)}</td><td>${esc(p.cache_write_per_million)}</td></tr>`).join('') || '<tr><td colspan="5">模型价格尚未公布，暂未开放付费调用。</td></tr>';
     document.getElementById('home-rates').textContent = `1 CNY = ${publicSite.cny_points_per_unit || '未配置'} 积分 · 1 USDT = ${publicSite.usdt_points_per_unit || '未配置'} 积分。订单到账积分以创建时快照为准。`;
     document.getElementById('home-site-error').textContent = '';
@@ -50,6 +75,8 @@ function api(path, opts = {}) {
 
 // ---- Auth ----
 function switchAuthTab(tab) {
+  if (tab === 'register' && !registrationEnabled) tab = 'login';
+  updateRoute(tab === 'register' ? '/register' : '/login');
   document.querySelectorAll('.seg .tab').forEach(t => t.classList.remove('active'));
   const btn = document.querySelector(`.seg .tab[onclick*="'${tab}'"]`);
   if (btn) btn.classList.add('active');
@@ -125,7 +152,7 @@ async function doRegister(e) {
 // Hard reset on logout so no previous-account data can linger in memory/DOM.
 function doLogout() {
   token = null; localStorage.removeItem('portal_token');
-  location.reload();
+  if (CLEAN_ROUTES) location.assign('/login'); else location.reload();
 }
 
 // ---- App shell ----
@@ -135,18 +162,19 @@ async function enterApp() {
   document.getElementById('page-app').classList.remove('hidden');
   try {
     const me = await api('/me');
-    isAdmin = !!me.user.is_admin;
+    isAdmin = !!me.user.is_admin && !CLEAN_ROUTES;
     document.getElementById('nav-admin').classList.toggle('hidden', !isAdmin);
     document.getElementById('nav-quota').classList.toggle('hidden', !isAdmin);
     document.getElementById('side-email').textContent = me.user.email;
     document.getElementById('side-avatar').textContent = (me.user.email||'U').charAt(0).toUpperCase();
   } catch(e) {}
-  navigate(location.hash.slice(1) || 'dashboard');
+  navigate(CLEAN_ROUTES ? requestedConsolePage : (location.hash.slice(1) || 'dashboard'));
 }
 function navigate(page) {
   if (page !== 'keys') document.getElementById('new-key-msg').innerHTML = '';
   if (!page || !document.getElementById('sec-' + page)) page = 'dashboard';
   if ((page === 'admin' || page === 'quota') && !isAdmin) page = 'dashboard';
+  updateRoute(page === 'dashboard' ? '/console' : '/console/' + page);
   document.querySelectorAll('[id^="sec-"]').forEach(s => s.classList.add('hidden'));
   document.getElementById('sec-' + page).classList.remove('hidden');
   document.querySelectorAll('.sidebar nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
@@ -274,7 +302,18 @@ function providerBadge(p) {
   const m = map[(p||'').toLowerCase()] || [p || '账号','badge-gray'];
   return `<span class="badge ${m[1]}">${esc(m[0])}</span>`;
 }
-window.addEventListener('hashchange', () => navigate(location.hash.slice(1)));
+window.addEventListener('hashchange', () => {
+  const page = location.hash.slice(1);
+  if (CONSOLE_PAGES.includes(page)) navigate(page);
+});
+window.addEventListener('popstate', () => {
+  if (!CLEAN_ROUTES) return;
+  requestedConsolePage = pageFromLocation();
+  if (location.pathname.startsWith('/console') && token) enterApp();
+  else if (location.pathname === '/login' || location.pathname.startsWith('/console')) showAuth('login');
+  else if (location.pathname === '/register') showAuth('register');
+  else showHome();
+});
 
 // ---- Dashboard ----
 async function loadDashboard() {
@@ -807,7 +846,7 @@ async function loadAssistant() {
   assistantReady = false;
   document.getElementById('assistant-send').disabled = true;
   const site = await loadPublicSite();
-  document.getElementById('assistant-docs').href = safeLink(site?.docs_url, BASE + '/ui/docs.html');
+  document.getElementById('assistant-docs').href = documentationLink(site?.docs_url);
   assistantReady = !!site?.helper_enabled;
   document.getElementById('assistant-info').textContent = assistantReady ? '配置助手由运营方提供，每日次数和输出长度有限。回答仅供参考，请核对客户端文档。' : '配置助手暂未开放，你可以先查阅接入文档。';
   document.getElementById('assistant-send').disabled = !assistantReady || assistantBusy;
@@ -858,12 +897,26 @@ async function copyText(id) {
 // ---- Init ----
 // Reveal email-code login only when the server has SMTP configured.
 api('/config').then(cfg => {
+  siteMode = cfg?.site_mode || 'legacy';
+  registrationEnabled = cfg?.registration_enabled !== false;
+  document.getElementById('tab-register').classList.toggle('hidden', !registrationEnabled);
+  document.getElementById('auth-home').classList.toggle('hidden', siteMode === 'privileged');
+  document.getElementById('auth-title').textContent = siteMode === 'privileged' ? '特权账户登录' : 'TrueCore AI';
+  if (siteMode === 'privileged' && !token) showAuth('login');
   if (cfg && cfg.email_login) {
     document.getElementById('tab-code').classList.remove('hidden');
     document.getElementById('alt-code').classList.remove('hidden');
   }
 }).catch(() => {});
 
+updateConsoleLinks();
 loadPublicSite();
-if (token) api('/me').then(() => enterApp()).catch(() => { token = null; localStorage.removeItem('portal_token'); showHome(); });
-else showHome();
+function showInitialPage() {
+  if (CLEAN_ROUTES && location.pathname === '/register') showAuth('register');
+  else if (CLEAN_ROUTES && (location.pathname === '/login' || location.pathname.startsWith('/console'))) showAuth('login');
+  else showHome();
+}
+if (token) api('/me').then(() => {
+  if (CLEAN_ROUTES && location.pathname === '/') showHome(); else enterApp();
+}).catch(() => { token = null; localStorage.removeItem('portal_token'); showInitialPage(); });
+else showInitialPage();

@@ -252,13 +252,13 @@ th{font-size:.74rem;text-transform:none;letter-spacing:0;background:#f8fafb}td{f
 <!-- ===================== Auth ===================== -->
 <div id="page-auth" class="auth-wrap hidden">
   <div class="auth-box">
-    <button class="btn btn-ghost" type="button" onclick="showHome()">← 返回首页</button>
+    <button id="auth-home" class="btn btn-ghost" type="button" onclick="showHome()">← 返回首页</button>
     <div class="auth-brand"><div class="logo" aria-hidden="true">TC</div></div>
-    <h2>TrueCore AI</h2>
+    <h2 id="auth-title">TrueCore AI</h2>
     <p class="auth-sub">登录以管理你的密钥、额度与用量</p>
     <div class="seg">
       <button class="tab active" onclick="switchAuthTab('login')">登录</button>
-      <button class="tab" onclick="switchAuthTab('register')">注册</button>
+      <button id="tab-register" class="tab" onclick="switchAuthTab('register')">注册</button>
       <button class="tab hidden" id="tab-code" onclick="switchAuthTab('code')">验证码</button>
     </div>
     <div id="auth-msg"></div>

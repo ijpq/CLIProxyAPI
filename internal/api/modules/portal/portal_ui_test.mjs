@@ -34,8 +34,9 @@ function app(pathname = '/private-prefix/portal/ui/', options = {}) {
       };
     },
   };
-  const location = {pathname, hash:options.hash || '', reload() {location.reloaded = true;}};
-  const context = vm.createContext({document, window: {addEventListener(name,fn) {events[name]=fn;}}, location,
+  const location = {pathname, hash:options.hash || '', reload() {location.reloaded = true;}, assign(path) {location.assigned=path;location.pathname=path;location.hash='';}};
+  const history = {pushState(_state,_title,path) {location.pathname=path;location.hash='';}};
+  const context = vm.createContext({document, window: {addEventListener(name,fn) {events[name]=fn;}}, location, history,
     localStorage: {getItem(key) {return stored.get(key) || null;}, removeItem(key) {stored.delete(key);}, setItem(key,value) {stored.set(key,value);}},
     fetch: options.fetch || (async () => ({ok: true, status: 200, json: async () => ({})})),
     alert: message => alerts.push(message), confirm:()=>true,
@@ -560,4 +561,80 @@ test('leaving key management clears the one-time plaintext and clipboard failure
  run(`loadDashboard=()=>{};navigate('dashboard')`);assert.equal(document.getElementById('new-key-msg').innerHTML,'');
  context.navigator.clipboard.writeText=async()=>{throw Error('permission denied');};
  await run(`copyText('test-key')`);assert.match(alerts.at(-1),/手动选择并复制/);
+});
+
+// Clean customer URLs share one origin; the legacy private URL remains supported.
+test('customer page reloads keep all API and document links on the customer origin',async()=>{
+ for(const path of ['/','/login','/register','/console/keys']){
+  const instance=app(path);await flush();
+  assert.equal(instance.run('BASE'),'/api/portal');
+  assert.equal(instance.run('documentationLink("https://elsewhere.example/docs")'),'/docs');
+  assert.equal(instance.document.getElementById('home-docs').href,'/docs');
+ }
+ const registration=app('/register');await flush();
+ assert.equal(registration.location.pathname,'/register');
+ assert.equal(registration.document.getElementById('form-register').classList.contains('hidden'),false);
+ const login=app('/login');await flush();
+ assert.equal(login.document.getElementById('form-login').classList.contains('hidden'),false);
+ const consolePage=app('/console/keys');await flush();
+ assert.equal(consolePage.location.pathname,'/login');
+});
+
+test('private-site configuration removes registration and returns anonymous users to login',async()=>{
+ const instance=app('/portal/ui/',{fetch:async path=>({ok:true,status:200,json:async()=>path.endsWith('/config')?{site_mode:'privileged',registration_enabled:false,email_login:true}:{}})});
+ await flush();
+ const {document,run}=instance;
+ assert.equal(document.getElementById('page-auth').classList.contains('hidden'),false);
+ assert.equal(document.getElementById('page-home').classList.contains('hidden'),true);
+ assert.equal(document.getElementById('tab-register').classList.contains('hidden'),true);
+ assert.equal(document.getElementById('auth-home').classList.contains('hidden'),true);
+ assert.equal(document.getElementById('auth-title').textContent,'特权账户登录');
+ run("showAuth('register')");assert.equal(document.getElementById('form-register').classList.contains('hidden'),true);
+ run("switchAuthTab('register')");assert.equal(document.getElementById('form-login').classList.contains('hidden'),false);
+ run('showHome()');assert.equal(document.getElementById('page-auth').classList.contains('hidden'),false);
+});
+
+test('customer sessions can reload console paths without leaving the site',async()=>{
+ const fetch=async path=>({ok:true,status:200,json:async()=>path.endsWith('/me')?{user:{email:'customer@example.test',is_admin:true}}:{}});
+ const instance=app('/console/keys',{token:'test-session',fetch});await flush();
+ assert.equal(instance.location.pathname,'/console/keys');
+ assert.equal(instance.run('isAdmin'),false);
+ instance.run("navigate('admin')");assert.equal(instance.location.pathname,'/console');
+ const home=app('/',{token:'test-session',fetch});await flush();
+ assert.equal(home.location.pathname,'/');assert.equal(home.document.getElementById('page-home').classList.contains('hidden'),false);
+ instance.run('doLogout()');assert.equal(instance.location.assigned,'/login');assert.equal(instance.stored.has('portal_token'),false);
+});
+
+test('customer route history, links and rejected sessions return to the correct page',async()=>{
+ const instance=app('/login');await flush();
+ instance.run("showAuth('register')");assert.equal(instance.location.pathname,'/register');
+ instance.run("showAuth('code')");assert.equal(instance.location.pathname,'/login');
+ const keyLink={getAttribute(){return '#keys';},href:'#keys'},priceLink={getAttribute(){return '#home-pricing';},href:'#home-pricing'};
+ instance.selectors.set('a[href^="#"]',[keyLink,priceLink]);instance.run('updateConsoleLinks()');
+ assert.equal(keyLink.href,'/console/keys');assert.equal(priceLink.href,'#home-pricing');
+ for(const path of ['/register','/login','/console/usage','/']){
+  instance.location.pathname=path;instance.events.popstate();await flush();
+  assert.equal(instance.location.pathname,path.startsWith('/console')?'/login':path);
+ }
+ instance.run("token='test';api=async()=>({user:{email:'customer@example.test'}})");
+ instance.location.pathname='/console/settings';instance.events.popstate();await flush();assert.equal(instance.location.pathname,'/console/settings');
+ const legacy=app('/portal/ui/');legacy.events.popstate();assert.equal(legacy.location.pathname,'/portal/ui/');
+ const rejected=app('/console/keys',{token:'expired',fetch:async path=>({ok:!path.endsWith('/me'),status:401,json:async()=>({})})});await flush();
+ assert.equal(rejected.location.pathname,'/login');assert.equal(rejected.stored.has('portal_token'),false);
+});
+
+test('the marketing price anchor does not load authenticated dashboard endpoints',async()=>{
+ const instance=app('/');await flush();instance.run("let navigations=0;navigate=()=>navigations++");
+ instance.location.hash='#home-pricing';instance.events.hashchange();assert.equal(instance.run('navigations'),0);
+ instance.location.hash='#keys';instance.events.hashchange();assert.equal(instance.run('navigations'),1);
+});
+
+test('customer documentation uses clean links and the same-origin site API',async()=>{
+ const nodes=new Map();let requested='';
+ const scriptURL=new URL('./static/docs.js',import.meta.url);
+ const context=vm.createContext({location:{pathname:'/docs'},document:{getElementById(id){if(!nodes.has(id))nodes.set(id,{});return nodes.get(id);}},
+  fetch:async path=>{requested=path;return {ok:true,json:async()=>({public_api_base:'https://api.example.test/v1'})};}});
+ vm.runInContext(readFileSync(scriptURL,'utf8'),context,{filename:fileURLToPath(scriptURL)});await flush();
+ assert.equal(requested,'/api/portal/public');assert.equal(nodes.get('docs-home').href,'/');assert.equal(nodes.get('docs-console').href,'/console/keys');
+ assert.equal(nodes.get('api-base').textContent,'https://api.example.test/v1');
 });
