@@ -124,7 +124,9 @@ function togglePw(btn) {
   const inp = btn.parentElement.querySelector('input');
   const show = inp.type === 'password';
   inp.type = show ? 'text' : 'password';
-  btn.textContent = show ? '🙈' : '👁';
+  btn.textContent = show ? '隐藏' : '显示';
+  btn.setAttribute('aria-pressed', String(show));
+  btn.setAttribute('aria-label', show ? '隐藏密码' : '显示密码');
 }
 
 async function doLogin(e) {
@@ -588,7 +590,7 @@ function showOrderDetail(o) {
   detail.classList.remove('hidden');
   let html = `<h3>订单 ${esc(o.id).slice(0,8)}…</h3>
     <p><strong>请支付：</strong><span style="font-size:1.3rem;font-weight:800;color:var(--accent-2)">${esc(o.amount)} ${esc(o.currency)}</span></p>
-    <p style="color:#fb7185;font-size:.85rem;margin:.5rem 0">请务必按此精确金额支付</p>`;
+    <p style="color:var(--danger);font-size:.85rem;margin:.5rem 0">请务必按此精确金额支付</p>`;
   html += `<p>到账积分：<strong>${esc(o.points_amount || '待对账')}</strong> · 创建时兑换率：1 ${esc(o.currency)} = ${esc(o.exchange_rate || '待对账')} 积分</p>`;
   if (o.wallet_address && !o.wallet_address.startsWith('http'))
     html += `<div class="copy-wrap"><code id="order-addr">${esc(o.wallet_address)}</code><button class="btn btn-sm btn-primary" onclick="copyText('order-addr')">复制</button></div>`;
@@ -723,18 +725,18 @@ async function loadUsageStats() {
       const barW = Math.max(4, Math.floor(500 / r.daily.length) - 2), chartH = 120;
       const bars = r.daily.map((d, i) => {
         const h = Math.max(1, (parseFloat(d.cost) / maxCost) * (chartH - 20));
-        return `<rect x="${i*(barW+2)}" y="${chartH-h}" width="${barW}" height="${h}" fill="url(#g)" rx="2"><title>${d.date}: ${parseFloat(d.cost).toFixed(4)}</title></rect>`;
+        return `<rect x="${i*(barW+2)}" y="${chartH-h}" width="${barW}" height="${h}" fill="var(--faint)" rx="2"><title>${d.date}: ${parseFloat(d.cost).toFixed(4)}</title></rect>`;
       }).join('');
-      container.innerHTML += `<div class="stat-card" style="grid-column:span 2;min-width:300px">
+      container.innerHTML += `<div class="stat-card usage-chart">
         <div class="label">近 30 天日消费</div>
         <div style="overflow-x:auto;margin-top:.5rem"><svg width="${r.daily.length*(barW+2)}" height="${chartH}" style="display:block">
-          <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs>${bars}</svg></div>
+          ${bars}</svg></div>
         <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted);margin-top:.25rem">
           <span>${r.daily[0]?.date?.slice(5)||''}</span><span>${r.daily[r.daily.length-1]?.date?.slice(5)||''}</span></div></div>`;
     }
     if (r.by_model && r.by_model.length > 0) {
       const total = r.by_model.reduce((s, m) => s + parseFloat(m.cost), 0) || 1;
-      const colors = ['#6366f1','#22c55e','#f59e0b','#f43f5e','#a855f7','#06b6d4','#f97316','#ec4899'];
+      const colors = ['#525252','#737373','#8f8f8f','#a3a3a3','#b8b8b8','#6b7280','#9198a1','#c2c6cc'];
       let html = '<div class="label">模型分布 (近 30 天)</div><div style="margin-top:.5rem">';
       r.by_model.forEach((m, i) => {
         const pct = (parseFloat(m.cost) / total * 100).toFixed(1);
@@ -743,7 +745,7 @@ async function loadUsageStats() {
           <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(m.model)}</span>
           <span class="muted">${pct}%</span><span style="font-weight:700">${parseFloat(m.cost).toFixed(4)}</span></div>`;
       });
-      container.innerHTML += `<div class="stat-card" style="min-width:220px">${html}</div></div>`;
+      container.innerHTML += `<div class="stat-card">${html}</div></div>`;
     }
   } catch(err) { /* non-critical */ }
 }
