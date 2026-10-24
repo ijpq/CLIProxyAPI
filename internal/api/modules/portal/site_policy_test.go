@@ -246,12 +246,32 @@ func TestCustomerSiteAssetsAndPrivateUIKeepSeparatePaths(t *testing.T) {
 			t.Fatal("incorrect asset URLs")
 		}
 	}
-	req := httptest.NewRequest("GET", "/portal/ui/", nil)
-	req.Host = "private.example.test"
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	requirePortalStatus(t, w, 200)
-	if !strings.Contains(w.Body.String(), `src="app.js"`) {
-		t.Fatal("legacy UI asset path changed")
+	for _, path := range []string{"/portal/ui/", "/portal/ui/index.html"} {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = "private.example.test"
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		requirePortalStatus(t, w, 200)
+		for _, expected := range []string{
+			`data-portal-site="privileged"`, `id="page-home" class="landing hidden"`,
+			`id="page-auth" class="auth-wrap"`, `id="auth-title">特权账户登录`,
+			`id="auth-home" class="btn btn-ghost hidden"`, `id="tab-register" class="tab hidden"`,
+			`src="app.js?v=`,
+		} {
+			if !strings.Contains(w.Body.String(), expected) {
+				t.Fatalf("private login HTML missing %s", expected)
+			}
+		}
+		if w.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("private login response can be cached")
+		}
+		head := httptest.NewRequest("HEAD", path, nil)
+		head.Host = req.Host
+		hw := httptest.NewRecorder()
+		r.ServeHTTP(hw, head)
+		requirePortalStatus(t, hw, 200)
+		if hw.Body.Len() != 0 || hw.Header().Get("Content-Length") != w.Header().Get("Content-Length") {
+			t.Fatal("private entry HEAD response does not match GET metadata")
+		}
 	}
 }

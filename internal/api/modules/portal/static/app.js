@@ -1,7 +1,8 @@
 const CLEAN_ROUTES = !/\/ui(?:\/(?:index|docs)\.html)?\/?$/.test(location.pathname);
 const BASE = CLEAN_ROUTES ? '/api/portal' : location.pathname.replace(/\/ui(?:\/(?:index|docs)\.html)?\/?$/, '');
 const CONSOLE_PAGES = ['dashboard','keys','topup','usage','assistant','settings','admin','quota'];
-let siteMode = 'legacy', registrationEnabled = true;
+let siteMode = document.documentElement.dataset.portalSite || 'legacy';
+let registrationEnabled = siteMode !== 'privileged';
 function pageFromLocation() {
   if (!CLEAN_ROUTES) return location.hash.slice(1) || 'dashboard';
   const page = location.pathname.replace(/^\/console\/?/, '');
@@ -897,8 +898,8 @@ async function copyText(id) {
 // ---- Init ----
 // Reveal email-code login only when the server has SMTP configured.
 api('/config').then(cfg => {
-  siteMode = cfg?.site_mode || 'legacy';
-  registrationEnabled = cfg?.registration_enabled !== false;
+  siteMode = cfg?.site_mode || siteMode;
+  registrationEnabled = cfg?.registration_enabled ?? (siteMode !== 'privileged');
   document.getElementById('tab-register').classList.toggle('hidden', !registrationEnabled);
   document.getElementById('auth-home').classList.toggle('hidden', siteMode === 'privileged');
   document.getElementById('auth-title').textContent = siteMode === 'privileged' ? '特权账户登录' : 'TrueCore AI';
@@ -910,9 +911,10 @@ api('/config').then(cfg => {
 }).catch(() => {});
 
 updateConsoleLinks();
-loadPublicSite();
+if (siteMode !== 'privileged') loadPublicSite();
 function showInitialPage() {
-  if (CLEAN_ROUTES && location.pathname === '/register') showAuth('register');
+  if (siteMode === 'privileged') showAuth('login');
+  else if (CLEAN_ROUTES && location.pathname === '/register') showAuth('register');
   else if (CLEAN_ROUTES && (location.pathname === '/login' || location.pathname.startsWith('/console'))) showAuth('login');
   else showHome();
 }

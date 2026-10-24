@@ -22,6 +22,7 @@ function app(pathname = '/private-prefix/portal/ui/', options = {}) {
     };
   };
   const document = {
+    documentElement: {dataset: {portalSite: options.siteMode || ''}},
     getElementById(id) { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     querySelectorAll(selector) { return selectors.get(selector) || []; },
     querySelector(selector) { return (selectors.get(selector) || [])[0] || null; },
@@ -592,6 +593,33 @@ test('private-site configuration removes registration and returns anonymous user
  run("showAuth('register')");assert.equal(document.getElementById('form-register').classList.contains('hidden'),true);
  run("switchAuthTab('register')");assert.equal(document.getElementById('form-login').classList.contains('hidden'),false);
  run('showHome()');assert.equal(document.getElementById('page-auth').classList.contains('hidden'),false);
+});
+
+test('private entry shows login immediately while config is pending or unavailable',async()=>{
+ for (const fail of [false,true]) {
+  const requested=[];
+  const instance=app('/portal/ui/',{siteMode:'privileged',fetch:path=>{
+   requested.push(path);
+   return fail ? Promise.reject(Error('offline')) : new Promise(()=>{});
+  }});
+  assert.equal(instance.document.getElementById('page-auth').classList.contains('hidden'),false);
+  assert.equal(instance.document.getElementById('page-home').classList.contains('hidden'),true);
+  assert.equal(instance.run('registrationEnabled'),false);
+  await flush();
+  assert.deepEqual(requested,['/portal/config']);
+  instance.run("showAuth('register')");
+  assert.equal(instance.document.getElementById('form-register').classList.contains('hidden'),true);
+ }
+});
+
+test('private entry keeps login on incomplete config and a rejected saved session',async()=>{
+ const instance=app('/portal/ui/',{siteMode:'privileged',token:'expired-test-session',fetch:async path=>({ok:!path.endsWith('/me'),status:path.endsWith('/me')?401:200,json:async()=>({})})});
+ await flush();
+ assert.equal(instance.document.getElementById('page-auth').classList.contains('hidden'),false);
+ assert.equal(instance.document.getElementById('page-home').classList.contains('hidden'),true);
+ assert.equal(instance.stored.has('portal_token'),false);
+ assert.equal(instance.run('siteMode'),'privileged');
+ assert.equal(instance.run('registrationEnabled'),false);
 });
 
 test('customer sessions can reload console paths without leaving the site',async()=>{
