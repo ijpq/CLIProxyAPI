@@ -164,7 +164,9 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.POST("/topup/:id/cancel", m.handleCancelTopupOrder)
 
 	sub, _ := fs.Sub(staticFS, "static")
-	r.StaticFS("/ui", http.FS(sub))
+	ui := r.Group("")
+	ui.Use(m.privateUIEntry())
+	ui.StaticFS("/ui", http.FS(sub))
 
 	admin := r.Group("/admin")
 	admin.Use(m.privateAdminSite(), m.AuthMiddleware(), m.adminOnly())
