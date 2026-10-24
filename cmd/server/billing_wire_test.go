@@ -92,3 +92,13 @@ func TestSetupBillingRejectsUnverifiedAdministratorBootstrap(t *testing.T) {
 		t.Fatalf("shared-address auto-confirm accepted: %v", err)
 	}
 }
+
+func TestSetupBillingRejectsPartialPortalSiteConfiguration(t *testing.T) {
+	t.Setenv("BILLING_ENABLED", "true")
+	t.Setenv("BILLING_PUBLIC_PORTAL_HOST", "portal.example.test")
+	t.Setenv("BILLING_PRIVILEGED_PORTAL_HOST", "")
+	t.Setenv("BILLING_PRIVILEGED_USER_IDS", "")
+	if _, err := setupBilling(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "portal:") {
+		t.Fatalf("partial site policy did not prevent startup: %v", err)
+	}
+}

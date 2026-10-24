@@ -67,6 +67,7 @@ type Module struct {
 	emailSender     billing.EmailSender
 	loginCodes      *billing.LoginCodeStore
 	helper          HelperReply
+	sitePolicy      *SitePolicy
 }
 
 // New builds a portal module. A nil keyGen falls back to the default 32-byte
@@ -123,12 +124,14 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	if m == nil {
 		return
 	}
+	r.Use(m.siteMiddleware())
 	r.POST("/register", m.handleRegister)
 	r.POST("/login", m.handleLogin)
 	// Public config (lets the UI know which auth methods are available) and
 	// passwordless email-code login.
 	r.GET("/config", m.handlePortalConfig)
 	r.GET("/public", m.handlePublicSite)
+	r.GET("/site/:asset", m.handleSiteAsset)
 	r.POST("/login/code/request", m.handleRequestLoginCode)
 	r.POST("/login/code/verify", m.handleVerifyLoginCode)
 
@@ -164,7 +167,7 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	r.StaticFS("/ui", http.FS(sub))
 
 	admin := r.Group("/admin")
-	admin.Use(m.AuthMiddleware(), m.adminOnly())
+	admin.Use(m.privateAdminSite(), m.AuthMiddleware(), m.adminOnly())
 	admin.GET("/topup", m.handleAdminListTopupOrders)
 	admin.POST("/topup/:id/confirm", m.handleAdminConfirmTopupOrder)
 	admin.GET("/users", m.handleAdminListUsers)

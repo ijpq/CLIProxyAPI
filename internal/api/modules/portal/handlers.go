@@ -38,6 +38,10 @@ type createKeyRequest struct {
 }
 
 func (m *Module) handleRegister(c *gin.Context) {
+	if !m.registrationAllowed(c) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "此入口仅供已有特权账户登录，不开放注册"})
+		return
+	}
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -90,6 +94,9 @@ func (m *Module) handleLogin(c *gin.Context) {
 	}
 	if err := billing.ComparePassword(user.PasswordHash, req.Password); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	if !m.enforceUserSite(c, user.ID) {
 		return
 	}
 	token, err := m.tokens.Issue(user.ID, user.IsAdmin)

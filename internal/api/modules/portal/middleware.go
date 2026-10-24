@@ -43,6 +43,9 @@ func (m *Module) AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 		// A signed claim identifies the session; current database state decides access.
+		if !m.enforceUserSite(c, user.ID) {
+			return
+		}
 		c.Set(ginCtxUserID, user.ID)
 		c.Set(ginCtxIsAdmin, user.IsAdmin)
 		c.Request = c.Request.WithContext(billing.WithUserID(c.Request.Context(), claims.UserID))

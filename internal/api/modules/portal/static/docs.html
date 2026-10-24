@@ -3,7 +3,7 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>接入文档 · TrueCore AI</title><style>
 *{box-sizing:border-box}body{margin:0;background:#f5f7f9;color:#182c3b;font:16px/1.8 system-ui,sans-serif}main{max-width:860px;margin:0 auto;padding:2rem 1.25rem 5rem}a{color:#0f766e}h1{font-size:2.4rem}h2{margin-top:2.5rem}p,li{color:#586b7c}pre{padding:1.25rem;background:#fff;border:1px solid #d6dee6;border-radius:12px;overflow:auto}code{font-family:ui-monospace,monospace}nav{display:flex;gap:1.5rem}aside{padding:1rem;border-left:3px solid #0f766e;background:#fff}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.8rem;border-bottom:1px solid #d6dee6}#api-base{overflow-wrap:anywhere}
 </style></head>
-<body><main><nav><a href="./">← 首页与价格</a><a href="./#keys">控制台</a></nav><h1>把模型接入你的客户端</h1><p>创建账号、充值积分并生成 API Key 后，在客户端填写 API Base、API Key 和模型名。</p>
+<body><main><nav><a id="docs-home" href="./">← 首页与价格</a><a id="docs-console" href="./#keys">控制台</a></nav><h1>把模型接入你的客户端</h1><p>创建账号、充值积分并生成 API Key 后，在客户端填写 API Base、API Key 和模型名。</p>
 <aside>密钥只保存在你自己的客户端中。向配置助手求助时，使用 <code>YOUR_API_KEY</code> 占位符，删除日志和截图中的密钥。</aside>
 <h2>连接参数</h2><table><tbody><tr><th>OpenAI 兼容 API Base</th><td id="api-base">请在首页核对运营方公布的地址。</td></tr><tr><th>API Key</th><td>控制台 → API 密钥 → 创建 Key。明文仅显示一次。</td></tr><tr><th>模型名</th><td>复制首页已公布的模型名，或查询 <code>GET /v1/models</code>。</td></tr></tbody></table><p>部分客户端要求 API Base 包含 <code>/v1</code>，另一些会自动添加。请先核对客户端文档，避免出现 <code>/v1/v1</code>。Claude Messages、Gemini 原生客户端使用各自的协议路径，需要核对客户端是否允许自定义服务地址。</p>
 <h2>先用一个文本请求验证</h2><p>把示例地址和模型名替换为首页公布的值。把密钥放入你本机的环境变量，避免写入代码或分享记录。</p>
