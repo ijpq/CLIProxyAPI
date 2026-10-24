@@ -47,10 +47,12 @@ func (m *Module) handleKeyModels(c *gin.Context) {
 	}
 	ctx := billing.WithAllowedModels(c.Request.Context(), user.AllowedModels)
 	models := make([]string, 0, len(prices))
+	availablePrices := make([]store.PointPrice, 0, len(prices))
 	for _, price := range prices {
 		if price.Enabled && billing.ModelAllowed(ctx, price.Model) {
 			models = append(models, price.Model)
+			availablePrices = append(availablePrices, price)
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"models": models})
+	c.JSON(http.StatusOK, gin.H{"models": models, "prices": availablePrices, "unit": "POINTS"})
 }

@@ -3,6 +3,9 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 import vm from 'node:vm';
+import {spawn} from 'node:child_process';
+import {createServer} from 'node:http';
+import {once} from 'node:events';
 
 // Run the actual application script with a small deterministic DOM adapter.
 // This covers serialization and async UI state; it is not a browser layout test.
@@ -14,6 +17,7 @@ function app(pathname = '/private-prefix/portal/ui/', options = {}) {
     const classes = new Set();
     return {
       value: '', textContent: '', innerHTML: '', style: {}, dataset: {}, focus() {}, querySelector() {return null;}, remove() {}, insertAdjacentHTML(position, html) {this.innerHTML += html;},
+      open:false, showModal() {this.open=true;}, close() {this.open=false;}, setAttribute(name,value) {this[name]=value;},
       classList: {
         add: value => classes.add(value), remove: value => classes.delete(value),
         contains: value => classes.has(value),
@@ -54,6 +58,131 @@ test('HTML escaping is safe in quoted attributes and text', () => {
   assert.ok(!escaped.includes('"'), 'attribute delimiter remains unescaped');
   assert.ok(!escaped.includes("'"), 'single quote remains unescaped');
   assert.equal(run(`esc('<tag>&')`), '&lt;tag&gt;&amp;');
+});
+
+test('model groups show the same effective price with an explicit reference price', async () => {
+ const {document,run}=await initialized();
+ run(`keyModelOptions=['model-a','model-b'];keyPrices=[{model:'model-a',discount_percent:10,input_per_million:'90.000000',output_per_million:'180.000000',cache_read_per_million:'0',cache_write_per_million:'9',standard_price:{input_per_million:'100.000000'}},{model:'model-b',discount_percent:20,input_per_million:'80.000000'}];renderKeyModels('key')`);
+ assert.match(document.getElementById('key-groups').innerHTML,/全部模型.*便宜 10%.*便宜 20%/);
+ assert.match(document.getElementById('key-models').innerHTML,/<del>100.000000<\/del><span>90.000000/);
+ assert.match(document.getElementById('key-models').innerHTML,/按 90% 计费/);
+ run(`setKeyGroup('key','10')`);
+ const html=document.getElementById('key-models').innerHTML;
+ assert.match(html,/<tr hidden>.*model-b/);
+ assert.match(html,/<del>100.000000<\/del><span>90.000000/);
+ assert.match(document.getElementById('key-model-help').textContent,/分组与搜索仅用于查看价格/);
+ run(`keyGroups.key='invalid';renderKeyModels('key')`);assert.equal(run('keyGroups.key'),'all');
+});
+
+test('model search preserves selections outside the visible group and escapes names', async () => {
+ const {document,run,selectors}=await initialized();
+ document.getElementById('key-scope').value='selected';
+ selectors.set('#key-models input:checked',[{value:'model-b'},{value:'unpublished'}]);
+ run(`keyModelOptions=['model-a','model-b','<script>'];keyPrices=[{model:'model-a',discount_percent:10},{model:'model-b',discount_percent:20}];setKeyGroup('key','10')`);
+ document.getElementById('key-search').value=' MODEL-A ';
+ run(`searchKeyModels('key')`);
+ const html=document.getElementById('key-models').innerHTML;
+ assert.match(html,/value="model-b" checked/);assert.match(html,/unpublished.*当前未上架/);
+ assert.ok(!html.includes('<script>'));assert.match(html,/&lt;script&gt;/);
+ assert.deepEqual(JSON.parse(run(`JSON.stringify(keyPolicyInput('key'))`)),{model_scope:'selected',allowed_models:['model-b','unpublished']});
+ assert.equal(document.getElementById('key-selection').textContent,'已选 2 个模型');
+ document.getElementById('key-search').value='no-match';run(`searchKeyModels('key')`);
+ assert.match(document.getElementById('key-models').innerHTML,/没有匹配/);
+ document.getElementById('key-scope').value='none';run(`toggleKeyModels('key')`);
+ assert.equal(document.getElementById('key-selection').textContent,'已禁止调用');
+ assert.match(document.getElementById('key-model-help').textContent,/禁止调用/);
+ assert.deepEqual(JSON.parse(run(`JSON.stringify(keyPolicyInput('key'))`)),{model_scope:'none',allowed_models:[]});
+});
+
+test('key configuration uses a modal, returns focus and blocks Escape during a save',async()=>{
+ const {document,run}=await initialized();let focused=0;document.activeElement={focus(){focused++;}};
+ run(`keyRows=[{id:'one',key_prefix:'cpk_example',model_scope:'all'}];editKeyPolicy(0)`);
+ assert.equal(document.getElementById('key-edit').open,true);
+ run(`keyPolicyBusy=true;globalThis.prevented=0;cancelKeyPolicy({preventDefault(){prevented++}})`);
+ assert.equal(document.getElementById('key-edit').open,true);assert.equal(run('prevented'),1);
+ run(`keyPolicyBusy=false;cancelKeyPolicy({preventDefault(){}})`);
+ assert.equal(document.getElementById('key-edit').open,false);assert.equal(focused,1);assert.equal(run('editingKeyId'),null);
+ const html=readFileSync(new URL('./static/index.html',import.meta.url),'utf8');
+ assert.match(html,/<dialog id="key-edit"[^>]*aria-labelledby="key-edit-title"/);
+ assert.ok(html.indexOf('请求示例')>html.indexOf('id="keys-list"'));
+});
+
+test('late catalog updates preserve an open dialog and navigation cannot leave an invisible modal',async()=>{
+ const {document,run,selectors}=await initialized();
+ run(`keyRows=[{id:'one',model_scope:'selected',allowed_models:['model-a']}];editKeyPolicy(0)`);
+ selectors.set('#edit-key-models input:checked',[{value:'model-a'}]);
+ await run(`api=async path=>path==='/api-key-models'?{models:['model-a'],prices:[{model:'model-a',input_per_million:'12'}]}:{keys:[{id:'one'}]};loadKeys()`);
+ assert.match(document.getElementById('edit-key-models').innerHTML,/value="model-a" checked/);
+ assert.match(document.getElementById('edit-key-models').innerHTML,/<span>12<\/span>/);
+ await run(`api=async path=>{if(path==='/api-key-models')throw {status:503};return {keys:[{id:'one'}]}};loadKeys()`);
+ assert.match(document.getElementById('edit-key-models').innerHTML,/当前未上架/);
+ assert.ok(!document.getElementById('edit-key-models').innerHTML.includes('<span>12</span>'));
+ run(`keyPolicyBusy=true;loadDashboard=()=>{};navigate('dashboard')`);
+ assert.equal(document.getElementById('key-edit').open,false);assert.equal(run('editingKeyId'),null);
+});
+
+test('examples normalize the configured API base and never reuse a secret or the portal origin',async()=>{
+ const {document,run,selectors}=await initialized();
+ const active=document.getElementById('example-button');active.dataset.exampleLanguage='python';
+ selectors.set('[data-example-language]',[active]);
+ for(const [input,want] of [['https://api.example.test/prefix','https://api.example.test/prefix/v1'],['https://api.example.test/prefix/v1/v1/','https://api.example.test/prefix/v1'],['http://localhost:123/v1','http://localhost:123/v1']]) {
+  run(`publicSite={public_api_base:${JSON.stringify(input)}}`);assert.equal(run('exampleAPIBase()'),want);
+ }
+ for (const input of ['', 'javascript:alert(1)','ftp://api.example.test','https://user:pass@api.example.test','https://api.example.test?secret=x','https://api.example.test#fragment']) {
+  run(`publicSite={public_api_base:${JSON.stringify(input)}}`);assert.equal(run('exampleAPIBase()'),'');
+ }
+ document.getElementById('new-key-val').textContent='cpk_do_not_copy_into_examples';
+ run(`keyModelOptions=['model-a','model-b'];renderKeyExamples('python')`);
+ assert.equal(active['aria-pressed'],'true');assert.match(document.getElementById('key-api-base').textContent,/尚未配置/);
+ assert.ok(!document.getElementById('key-example-code').textContent.includes('cpk_do_not_copy'));
+ document.getElementById('key-example-model').value='model-b';run(`renderKeyExamples('nodejs')`);
+ assert.match(document.getElementById('key-example-code').textContent, /model-b/);
+ run(`renderKeyExamples('unknown')`);assert.equal(run('exampleLanguage'),'curl');
+ await run('copyKeyExample()');assert.equal(document.getElementById('key-example-copy-status').textContent,'已复制');
+ await run(`navigator.clipboard.writeText=async()=>{throw Error('denied')};copyKeyExample()`);
+ assert.match(document.getElementById('key-example-copy-status').textContent,/手动/);
+});
+
+function runExample(command,args,code,keyInput='') {
+ return new Promise((resolve,reject)=>{
+  const child=spawn(command,args,{env:{...process.env,CPA_API_KEY:'synthetic-example-key'},stdio:['pipe','pipe','pipe']});
+  let out='',err='';child.stdout.on('data',chunk=>out+=chunk);child.stderr.on('data',chunk=>err+=chunk);
+  child.on('error',reject);child.on('close',status=>status===0?resolve(out):reject(Error(`${command} exit ${status}: ${err}`)));
+  child.stdin.end(keyInput || code);
+ });
+}
+
+test('all four generated examples send correct requests to an isolated HTTP stub',async()=>{
+ const {document,run}=await initialized();const requests=[];
+ const server=createServer(async(request,response)=>{
+  let data='';for await(const chunk of request)data+=chunk;
+  requests.push({method:request.method,path:request.url,auth:request.headers.authorization,type:request.headers['content-type'],body:JSON.parse(data)});
+  response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({choices:[{message:{content:'synthetic answer'}}]}));
+ });
+ server.listen(0,'127.0.0.1');await once(server,'listening');
+ try {
+  const model=`model-'quoted"-$(not-a-command)`;
+  run(`keyModelOptions=[${JSON.stringify(model)}];publicSite={public_api_base:'http://127.0.0.1:${server.address().port}/prefix/v1/'};`);
+  for(const language of ['curl','python','nodejs','shell']) {
+   run(`renderKeyExamples('${language}')`);const code=document.getElementById('key-example-code').textContent;
+   let output;
+   if(language==='python') output=await runExample('python3',['-'],code);
+   else if(language==='nodejs') output=await runExample(process.execPath,['--input-type=module','-'],code);
+   else if(language==='shell') output=await runExample('bash',['-c',code],'','synthetic-example-key\n');
+   else output=await runExample('bash',['-s'],code);
+   assert.match(output,/synthetic answer/);
+   assert.deepEqual(requests.at(-1),{method:'POST',path:'/prefix/v1/chat/completions',auth:'Bearer synthetic-example-key',type:'application/json',body:{model,messages:[{role:'user',content:'你好'}],max_tokens:64}});
+  }
+  assert.equal(requests.length,4);
+ } finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+test('administrator discount editor preserves reference rates rather than discounting twice',async()=>{
+ const {document,run}=await initialized();
+ run(`pointPrices=[{model:'offer',input_per_million:'90',output_per_million:'180',cache_read_per_million:'0',cache_write_per_million:'9',enabled:true,version:2,discount_percent:10,standard_price:{input_per_million:'100',output_per_million:'200',cache_read_per_million:'0',cache_write_per_million:'10'}}];editPointPrice(0)`);
+ assert.equal(document.getElementById('price-input').value,'100');assert.equal(document.getElementById('price-discount').value,10);
+ await run(`globalThis.saved=null;api=async(path,opts)=>{if(opts){saved=JSON.parse(opts.body);return {...saved,version:3}}return {prices:[]}};savePointPrice({preventDefault(){}})`);
+ assert.equal(run('saved.discount_percent'),10);assert.equal(run('saved.standard_price.input_per_million'),'100');assert.equal(run('saved.version'),2);
 });
 
 test('creating an order leaves payment details visible after refreshing the list', async () => {
@@ -525,7 +654,7 @@ test('key permission saves prevent overlapping writes and protect an open editor
 
 test('model pickers and usage handle an empty published catalog without broadening permissions',async()=>{
  const {document,run}=await initialized();
- await run(`api=async()=>({});loadKeys();loadUsageFilterOptions();loadUsage(true)`);await flush();assert.match(document.getElementById('key-models').innerHTML,/暂时没有/);
+ await run(`api=async()=>({});loadKeys();loadUsageFilterOptions();loadUsage(true)`);await flush();assert.match(document.getElementById('key-models').innerHTML,/没有匹配/);
  await run(`api=async()=>({scope:'all',users:[{id:'user-only'}],records:[{model:'test',unit:'POINTS',cost:'0'}]});loadUsageFilterOptions();loadUsage(true)`);await flush();assert.match(document.getElementById('uf-user').innerHTML,/user-only/);
  await run(`api=async()=>{throw {status:503}};loadUsage(true)`);assert.match(document.getElementById('usage-list').innerHTML,/未知错误/);
  await run(`api=async()=>({by_model:[{model:'zero-cost',cost:'0'}]});loadUsageStats()`);assert.ok(!document.getElementById('usage-charts').innerHTML.includes('NaN'));

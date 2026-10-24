@@ -134,11 +134,11 @@ func (m *Module) handleAdminSavePrice(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "invalid model price"})
 		return
 	}
-	for _, price := range []string{p.Input, p.Output, p.CacheRead, p.CacheWrite} {
-		if _, err := billingvalue.Normalize(price, false); err != nil {
-			c.JSON(400, gin.H{"error": "prices must be nonnegative decimals with at most six fractional digits"})
-			return
-		}
+	var err error
+	p, err = store.NormalizePointPrice(p)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
 	}
 	saved, err := m.store.SavePointPrice(c.Request.Context(), p, userIDFromGin(c))
 	if errors.Is(err, store.ErrBillingConflict) {

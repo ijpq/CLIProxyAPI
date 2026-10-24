@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/billingvalue"
 )
 
 var ErrBillingConflict = errors.New("billing configuration was changed; reload and retry")
@@ -33,14 +31,16 @@ type PortalSettings struct {
 }
 
 type PointPrice struct {
-	Model      string    `json:"model"`
-	Input      string    `json:"input_per_million"`
-	Output     string    `json:"output_per_million"`
-	CacheRead  string    `json:"cache_read_per_million"`
-	CacheWrite string    `json:"cache_write_per_million"`
-	Enabled    bool      `json:"enabled"`
-	Version    int64     `json:"version"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	Model           string           `json:"model"`
+	Input           string           `json:"input_per_million"`
+	Output          string           `json:"output_per_million"`
+	CacheRead       string           `json:"cache_read_per_million"`
+	CacheWrite      string           `json:"cache_write_per_million"`
+	Enabled         bool             `json:"enabled"`
+	Version         int64            `json:"version"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+	DiscountPercent int              `json:"discount_percent"`
+	StandardPrice   *PointPriceRates `json:"standard_price,omitempty"`
 }
 
 func commerceSchemaStatements(s *PostgresStore) []string {
@@ -49,6 +49,7 @@ func commerceSchemaStatements(s *PostgresStore) []string {
 		fmt.Sprintf(`INSERT INTO %s(id, document) VALUES (1, '{"site_name":"TrueCore AI","helper_daily_limit":20,"helper_global_daily_limit":500,"helper_max_output_tokens":768}'::jsonb) ON CONFLICT DO NOTHING`, s.fullTableName("billing_portal_settings")),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (id BIGSERIAL PRIMARY KEY, actor TEXT NOT NULL, kind TEXT NOT NULL, document JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`, s.fullTableName("billing_config_history")),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (model TEXT PRIMARY KEY, input NUMERIC(20,6) NOT NULL CHECK(input>=0), output NUMERIC(20,6) NOT NULL CHECK(output>=0), cache_read NUMERIC(20,6) NOT NULL CHECK(cache_read>=0), cache_write NUMERIC(20,6) NOT NULL CHECK(cache_write>=0), enabled BOOLEAN NOT NULL, version BIGINT NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`, s.fullTableName("billing_point_prices")),
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS discount_percent SMALLINT NOT NULL DEFAULT 0 CHECK(discount_percent BETWEEN 0 AND 99), ADD COLUMN IF NOT EXISTS standard_price JSONB`, s.fullTableName("billing_point_prices")),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (user_id UUID NOT NULL REFERENCES %s(id) ON DELETE CASCADE, day DATE NOT NULL, used INTEGER NOT NULL CHECK(used>0), PRIMARY KEY(user_id,day))`, s.fullTableName("billing_helper_usage"), s.fullTableName(BillingUsersTable)),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (day DATE PRIMARY KEY, used INTEGER NOT NULL CHECK(used>=0))`, s.fullTableName("billing_helper_global_usage")),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (event_id TEXT PRIMARY KEY, digest TEXT NOT NULL)`, s.fullTableName("billing_settled_events")),
@@ -103,7 +104,7 @@ func (s *PostgresStore) SavePortalSettings(ctx context.Context, cfg PortalSettin
 }
 
 func (s *PostgresStore) ListPointPrices(ctx context.Context) ([]PointPrice, error) {
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT model,input::text,output::text,cache_read::text,cache_write::text,enabled,version,updated_at FROM %s ORDER BY model`, s.fullTableName("billing_point_prices")))
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT model,input::text,output::text,cache_read::text,cache_write::text,enabled,version,updated_at,discount_percent,standard_price FROM %s ORDER BY model`, s.fullTableName("billing_point_prices")))
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +112,14 @@ func (s *PostgresStore) ListPointPrices(ctx context.Context) ([]PointPrice, erro
 	out := make([]PointPrice, 0)
 	for rows.Next() {
 		var p PointPrice
-		if err := rows.Scan(&p.Model, &p.Input, &p.Output, &p.CacheRead, &p.CacheWrite, &p.Enabled, &p.Version, &p.UpdatedAt); err != nil {
+		var standard []byte
+		if err := rows.Scan(&p.Model, &p.Input, &p.Output, &p.CacheRead, &p.CacheWrite, &p.Enabled, &p.Version, &p.UpdatedAt, &p.DiscountPercent, &standard); err != nil {
 			return nil, err
+		}
+		if len(standard) > 0 {
+			if err := json.Unmarshal(standard, &p.StandardPrice); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, p)
 	}
@@ -124,20 +131,21 @@ func (s *PostgresStore) SavePointPrice(ctx context.Context, p PointPrice, actor 
 	if p.Model == "" {
 		return p, fmt.Errorf("model is required")
 	}
-	for _, value := range []string{p.Input, p.Output, p.CacheRead, p.CacheWrite} {
-		if _, err := billingvalue.Normalize(value, false); err != nil {
-			return p, err
-		}
+	var err error
+	p, err = NormalizePointPrice(p)
+	if err != nil {
+		return p, err
 	}
+	standard, _ := json.Marshal(p.StandardPrice)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return p, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	query := fmt.Sprintf(`INSERT INTO %s(model,input,output,cache_read,cache_write,enabled) VALUES ($1,$2::numeric,$3::numeric,$4::numeric,$5::numeric,$6)
-		ON CONFLICT(model) DO UPDATE SET input=EXCLUDED.input,output=EXCLUDED.output,cache_read=EXCLUDED.cache_read,cache_write=EXCLUDED.cache_write,enabled=EXCLUDED.enabled,version=%s.version+1,updated_at=NOW() WHERE %s.version=$7
+	query := fmt.Sprintf(`INSERT INTO %s(model,input,output,cache_read,cache_write,enabled,discount_percent,standard_price) VALUES ($1,$2::numeric,$3::numeric,$4::numeric,$5::numeric,$6,$8,$9::jsonb)
+		ON CONFLICT(model) DO UPDATE SET input=EXCLUDED.input,output=EXCLUDED.output,cache_read=EXCLUDED.cache_read,cache_write=EXCLUDED.cache_write,enabled=EXCLUDED.enabled,discount_percent=EXCLUDED.discount_percent,standard_price=EXCLUDED.standard_price,version=%s.version+1,updated_at=NOW() WHERE %s.version=$7
 		RETURNING version,updated_at`, s.fullTableName("billing_point_prices"), s.fullTableName("billing_point_prices"), s.fullTableName("billing_point_prices"))
-	err = tx.QueryRowContext(ctx, query, p.Model, p.Input, p.Output, p.CacheRead, p.CacheWrite, p.Enabled, p.Version).Scan(&p.Version, &p.UpdatedAt)
+	err = tx.QueryRowContext(ctx, query, p.Model, p.Input, p.Output, p.CacheRead, p.CacheWrite, p.Enabled, p.Version, p.DiscountPercent, standard).Scan(&p.Version, &p.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrBillingConflict
 	}

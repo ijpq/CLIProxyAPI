@@ -172,6 +172,7 @@ async function enterApp() {
   navigate(CLEAN_ROUTES ? requestedConsolePage : (location.hash.slice(1) || 'dashboard'));
 }
 function navigate(page) {
+  if (page !== 'keys') closeKeyPolicy(true);
   if (page !== 'keys') document.getElementById('new-key-msg').innerHTML = '';
   if (!page || !document.getElementById('sec-' + page)) page = 'dashboard';
   if ((page === 'admin' || page === 'quota') && !isAdmin) page = 'dashboard';
@@ -338,6 +339,8 @@ async function loadDashboard() {
 
 // ---- Keys ----
 let keyRows = [], keyModelOptions = [], editingKeyId = null, keyCreateBusy = false, keyPolicyBusy = false;
+let keyPrices = [], keyGroups = {key:'all', 'edit-key':'all'}, keyDialogOpener = null;
+let exampleLanguage = 'curl';
 function keyPolicyLabel(key) {
   if (key.model_scope === 'none') return '已禁止所有模型';
   if (key.model_scope === 'selected') return (key.allowed_models || []).join('、') || '无可用模型';
@@ -349,10 +352,46 @@ function selectedKeyModels(prefix) {
 function renderKeyModels(prefix, selected = []) {
   const selectedSet = new Set(selected), published = new Set(keyModelOptions);
   const models = [...new Set([...keyModelOptions, ...selected])];
-  document.getElementById(prefix + '-models').innerHTML = models.map(model => `<label class="key-choice"><input type="checkbox" value="${esc(model)}" ${selectedSet.has(model) ? 'checked' : ''}><span>${esc(model)}${published.has(model) ? '' : '（当前未上架）'}</span></label>`).join('') || '<p class="key-policy-note">暂时没有可选择的模型，请稍后再试。</p>';
+  const prices = new Map(keyPrices.map(p => [p.model, p]));
+  const discounts = [...new Set([10, 20, ...keyPrices.map(p => p.discount_percent || 0).filter(Boolean)])].sort((a,b) => a-b);
+  const groups = ['all', ...discounts.map(String)];
+  const group = groups.includes(keyGroups[prefix]) ? keyGroups[prefix] : 'all';
+  keyGroups[prefix] = group;
+  const query = document.getElementById(prefix + '-search').value.trim().toLowerCase();
+  const scope = document.getElementById(prefix + '-scope').value || 'all';
+  document.getElementById(prefix + '-groups').innerHTML = groups.map(value => {
+    const count = value === 'all' ? keyModelOptions.length : keyPrices.filter(p => String(p.discount_percent) === value).length;
+    return `<button type="button" class="model-group ${group === value ? 'active' : ''}" aria-pressed="${group === value}" onclick="setKeyGroup('${prefix}','${value}')">${value === 'all' ? '全部模型' : '便宜 ' + value + '%'} <span>${count}</span></button>`;
+  }).join('');
+  let visible = 0;
+  const rows = models.map((model, index) => {
+    const p = prices.get(model);
+    const matches = model.toLowerCase().includes(query) && (group === 'all' || String(p?.discount_percent) === group);
+    if (matches) visible++;
+    const badge = p?.discount_percent ? `<span class="badge badge-green">便宜 ${esc(p.discount_percent)}% · 按 ${esc(100-p.discount_percent)}% 计费</span>` : '';
+    const cells = ['input_per_million','output_per_million','cache_read_per_million','cache_write_per_million'].map(field => `<td>${modelPriceCell(p, field)}</td>`).join('');
+    return `<tr ${matches ? '' : 'hidden'}><td><label class="key-choice" for="${prefix}-model-${index}"><input id="${prefix}-model-${index}" type="checkbox" value="${esc(model)}" ${selectedSet.has(model) ? 'checked' : ''} ${scope === 'selected' ? '' : 'disabled'} onchange="updateKeySelectionSummary('${prefix}')"><span><code>${esc(model)}</code>${published.has(model) ? '' : '（当前未上架）'}${badge}</span></label></td>${cells}</tr>`;
+  }).join('');
+  document.getElementById(prefix + '-models').innerHTML = `<table class="model-prices"><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th></tr></thead><tbody>${rows}</tbody></table>` + (visible ? '' : '<p class="empty">没有匹配的模型，可切换分组或修改搜索词。</p>');
+  document.getElementById(prefix + '-model-help').textContent = scope === 'all' ? '此 Key 可调用全部可用模型。分组与搜索仅用于查看价格；如需限制权限，请选择“指定模型”。' : scope === 'none' ? '此 Key 已禁止调用模型；下面的价格仅供查看。' : '可跨组勾选模型；搜索和切换分组不会清除已选项。分组不改变同一模型的计费价格。';
+  updateKeySelectionSummary(prefix);
+}
+function modelPriceCell(price, field) {
+  if (!price || price[field] === undefined) return '<span class="muted">未公布</span>';
+  const standard = price.standard_price?.[field];
+  return `${price.discount_percent && standard !== undefined ? '<del>' + esc(standard) + '</del>' : ''}<span>${esc(price[field])}</span>`;
+}
+function setKeyGroup(prefix, group) {
+  keyGroups[prefix] = group;
+  renderKeyModels(prefix, selectedKeyModels(prefix));
+}
+function searchKeyModels(prefix) { renderKeyModels(prefix, selectedKeyModels(prefix)); }
+function updateKeySelectionSummary(prefix) {
+  const scope = document.getElementById(prefix + '-scope').value || 'all';
+  document.getElementById(prefix + '-selection').textContent = scope === 'selected' ? `已选 ${selectedKeyModels(prefix).length} 个模型` : scope === 'none' ? '已禁止调用' : '全部可用模型';
 }
 function toggleKeyModels(prefix) {
-  document.getElementById(prefix + '-models').classList.toggle('hidden', document.getElementById(prefix + '-scope').value !== 'selected');
+  renderKeyModels(prefix, selectedKeyModels(prefix));
 }
 function keyPolicyInput(prefix) {
   const scope = document.getElementById(prefix + '-scope').value || 'all';
@@ -373,16 +412,23 @@ async function loadKeys() {
       <td><code>${esc(k.key_prefix)}…</code></td><td>${esc(k.name || '未命名 Key')}</td><td class="key-models-cell">${esc(keyPolicyLabel(k))}</td>
       <td>${fmtTime(k.created_at)}</td><td>${k.last_used_at ? fmtTime(k.last_used_at) : '尚未使用'}</td>
       <td>${k.revoked_at ? '<span class="badge badge-red">已吊销</span>' : '<span class="badge badge-green">有效</span>'}</td>
-      <td style="text-align:right">${k.revoked_at ? '' : `<button class="btn btn-sm" onclick="editKeyPolicy(${index})">模型权限</button> <button class="btn btn-danger btn-sm" onclick="revokeKeyAt(${index})">吊销</button>`}</td>
+      <td style="text-align:right">${k.revoked_at ? '' : `<button class="btn btn-sm" onclick="editKeyPolicy(${index})">配置</button> <button class="btn btn-danger btn-sm" onclick="revokeKeyAt(${index})">吊销</button>`}</td>
     </tr>`).join('') : '<tr><td colspan="7" class="empty">还没有 API Key。为你的第一个客户端创建密钥，开始接入。</td></tr>';
     try {
       const catalog = await api('/api-key-models');
       keyModelOptions = catalog.models || [];
+      keyPrices = catalog.prices || [];
       renderKeyModels('key', selectedKeyModels('key'));
+      if (editingKeyId) renderKeyModels('edit-key', selectedKeyModels('edit-key'));
     } catch(err) {
+      keyPrices = []; keyModelOptions = [];
+      renderKeyModels('key', selectedKeyModels('key'));
+      if (editingKeyId) renderKeyModels('edit-key', selectedKeyModels('edit-key'));
       errorNode.textContent = '模型列表暂时无法读取，指定模型时请稍后重试。';
       errorNode.classList.remove('hidden');
     }
+    if (!publicSite) await loadPublicSite();
+    renderKeyExamples();
   } catch(err) {
     if (err.status === 401) { doLogout(); return; }
     errorNode.textContent = '暂时无法读取 API Key，请刷新重试。';
@@ -410,30 +456,41 @@ function editKeyPolicy(index) {
   const key = keyRows[index];
   if (!key || key.revoked_at || keyPolicyBusy) return;
   editingKeyId = key.id;
-  document.getElementById('key-edit-title').textContent = '模型权限 · ' + (key.name || key.key_prefix);
+  keyDialogOpener = document.activeElement;
+  keyGroups['edit-key'] = 'all';
+  document.getElementById('edit-key-search').value = '';
+  document.getElementById('key-edit-title').textContent = '配置 Key · ' + (key.name || key.key_prefix);
   document.getElementById('edit-key-scope').value = key.model_scope || 'all';
   document.getElementById('key-edit-msg').textContent = '';
   renderKeyModels('edit-key', key.allowed_models || []);
-  toggleKeyModels('edit-key');
-  document.getElementById('key-edit').classList.remove('hidden');
+  const dialog = document.getElementById('key-edit');
+  dialog.classList.remove('hidden');
+  if (!dialog.open) dialog.showModal();
   document.getElementById('edit-key-scope').focus();
 }
-function closeKeyPolicy() {
-  if (keyPolicyBusy) return;
+function closeKeyPolicy(forNavigation = false) {
+  if (keyPolicyBusy && !forNavigation) return;
   editingKeyId = null;
-  document.getElementById('key-edit').classList.add('hidden');
+  const dialog = document.getElementById('key-edit');
+  dialog.close();
+  dialog.classList.add('hidden');
+  keyDialogOpener?.focus();
+  keyDialogOpener = null;
 }
+function cancelKeyPolicy(event) { event.preventDefault(); closeKeyPolicy(); }
 async function saveKeyPolicy() {
   if (!editingKeyId || keyPolicyBusy) return;
   const button = document.getElementById('key-policy-save');
   try {
     const policy = keyPolicyInput('edit-key');
     keyPolicyBusy = true; button.disabled = true;
+    document.getElementById('key-policy-fields').disabled = true;
     await api('/api-keys/' + encodeURIComponent(editingKeyId) + '/models', {method:'PUT', body:JSON.stringify(policy)});
     document.getElementById('key-edit-msg').textContent = '已保存，新请求将使用这些权限。';
     await loadKeys();
+    if (editingKeyId) renderKeyModels('edit-key', policy.allowed_models);
   } catch(err) { document.getElementById('key-edit-msg').textContent = err.message; }
-  finally { keyPolicyBusy = false; button.disabled = false; }
+  finally { keyPolicyBusy = false; button.disabled = false; document.getElementById('key-policy-fields').disabled = false; }
 }
 function revokeKeyAt(index) {
   const key = keyRows[index];
@@ -446,6 +503,46 @@ async function revokeKey(id) {
     if (editingKeyId === id) closeKeyPolicy();
     await loadKeys();
   } catch(err) { alert(err.message); }
+}
+
+// Examples deliberately contain placeholders, never the newly created key.
+function exampleAPIBase() {
+  try {
+    const url = new URL(publicSite?.public_api_base);
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return '';
+    return url.href.replace(/\/+$/, '').replace(/(?:\/v1)+$/, '') + '/v1';
+  } catch { return ''; }
+}
+function shellQuote(value) { return "'" + value.replaceAll("'", "'\\''") + "'"; }
+function renderKeyExamples(language = exampleLanguage) {
+  exampleLanguage = ['curl','python','nodejs','shell'].includes(language) ? language : 'curl';
+  const base = exampleAPIBase() || 'https://YOUR_API_HOST/YOUR_API_PATH/v1';
+  const chosen = document.getElementById('key-example-model').value;
+  const model = keyModelOptions.includes(chosen) ? chosen : keyModelOptions[0] || 'MODEL_FROM_PRICE_LIST';
+  document.getElementById('key-example-model').innerHTML = (keyModelOptions.length ? keyModelOptions : [model]).map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join('');
+  document.getElementById('key-example-model').value = model;
+  document.getElementById('key-api-base').textContent = exampleAPIBase() || '运营方尚未配置 API Base，请先查看接入文档。';
+  document.getElementById('key-examples-note').textContent = '使用有权调用所选模型的 Key；执行示例会按实际用量扣除 credits。密钥通过本机环境变量 CPA_API_KEY 读取。';
+  document.querySelectorAll('[data-example-language]').forEach(button => {
+    button.classList.toggle('active', button.dataset.exampleLanguage === exampleLanguage);
+    button.setAttribute('aria-pressed', String(button.dataset.exampleLanguage === exampleLanguage));
+  });
+  const body = {model, messages:[{role:'user', content:'你好'}], max_tokens:64};
+  const endpoint = base + '/chat/completions';
+  const snippets = {
+    curl: `# 先在本机设置 CPA_API_KEY 环境变量\ncurl --fail-with-body ${shellQuote(endpoint)} \\\n  -H "Authorization: Bearer \${CPA_API_KEY:?请先设置 CPA_API_KEY}" \\\n  -H 'Content-Type: application/json' \\\n  --data-raw ${shellQuote(JSON.stringify(body))}`,
+    python: `# Python 3 · 使用标准库，无需安装依赖\nimport json\nimport os\nimport urllib.request\n\nbody = ${JSON.stringify(body,null,2)}\nrequest = urllib.request.Request(\n    ${JSON.stringify(endpoint)},\n    data=json.dumps(body).encode("utf-8"),\n    headers={\n        "Authorization": "Bearer " + os.environ["CPA_API_KEY"],\n        "Content-Type": "application/json",\n    },\n    method="POST",\n)\nwith urllib.request.urlopen(request) as response:\n    print(json.loads(response.read())["choices"][0]["message"]["content"])`,
+    nodejs: `// Node.js 18+ · 保存为 request.mjs 后运行 node request.mjs\nconst key = process.env.CPA_API_KEY;\nif (!key) throw new Error("请先设置 CPA_API_KEY");\nconst response = await fetch(${JSON.stringify(endpoint)}, {\n  method: "POST",\n  headers: {\n    "Authorization": "Bearer " + key,\n    "Content-Type": "application/json",\n  },\n  body: JSON.stringify(${JSON.stringify(body,null,2)}),\n});\nif (!response.ok) throw new Error("HTTP " + response.status);\nconst result = await response.json();\nconsole.log(result.choices[0].message.content);`,
+    shell: `#!/usr/bin/env bash\n# Bash · 依赖 curl 和 Python 3；交互输入不会显示密钥\nset -euo pipefail\nread -r -s -p 'API Key: ' CPA_API_KEY\nprintf '\\n'\nexport CPA_API_KEY\ntrap 'unset CPA_API_KEY' EXIT\nexport CPA_API_BASE=${shellQuote(base)}\nexport CPA_MODEL=${shellQuote(model)}\npython3 - <<'PY' | curl --fail-with-body "\${CPA_API_BASE}/chat/completions" \\\n  -H "Authorization: Bearer \${CPA_API_KEY}" \\\n  -H 'Content-Type: application/json' --data-binary @-\nimport json, os\nprint(json.dumps({"model": os.environ["CPA_MODEL"], "messages": [{"role": "user", "content": "你好"}], "max_tokens": 64}))\nPY`
+  };
+  document.getElementById('key-example-code').textContent = snippets[exampleLanguage];
+  document.getElementById('key-example-copy-status').textContent = '';
+}
+async function copyKeyExample() {
+  try {
+    await navigator.clipboard.writeText(document.getElementById('key-example-code').textContent);
+    document.getElementById('key-example-copy-status').textContent = '已复制';
+  } catch { document.getElementById('key-example-copy-status').textContent = '复制失败，请手动选择代码复制。'; }
 }
 
 // ---- Topup ----
@@ -818,7 +915,10 @@ function selectPriceVersion() {
 function editPointPrice(i) {
   const p = pointPrices[i];
   if (!p) return;
-  for (const [id, key] of Object.entries({'price-model':'model','price-input':'input_per_million','price-output':'output_per_million','price-read':'cache_read_per_million','price-write':'cache_write_per_million'})) document.getElementById(id).value = p[key];
+  document.getElementById('price-model').value = p.model;
+  const rates = p.standard_price || p;
+  for (const [id, key] of Object.entries({'price-input':'input_per_million','price-output':'output_per_million','price-read':'cache_read_per_million','price-write':'cache_write_per_million'})) document.getElementById(id).value = rates[key];
+  document.getElementById('price-discount').value = p.discount_percent || 0;
   document.getElementById('price-enabled').checked = p.enabled;
   priceVersion = p.version;
 }
@@ -826,6 +926,8 @@ async function savePointPrice(e) {
   e.preventDefault();
   const p = {model:document.getElementById('price-model').value.trim(), version:priceVersion, enabled:document.getElementById('price-enabled').checked};
   for (const [id, key] of Object.entries({'price-input':'input_per_million','price-output':'output_per_million','price-read':'cache_read_per_million','price-write':'cache_write_per_million'})) p[key] = document.getElementById(id).value.trim();
+  p.discount_percent = Number(document.getElementById('price-discount').value);
+  if (p.discount_percent > 0) p.standard_price = {input_per_million:p.input_per_million,output_per_million:p.output_per_million,cache_read_per_million:p.cache_read_per_million,cache_write_per_million:p.cache_write_per_million};
   try {
     const saved = await api('/admin/pricing', {method:'PUT', body:JSON.stringify(p)});
     priceVersion = saved.version;
