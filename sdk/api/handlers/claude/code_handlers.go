@@ -165,7 +165,7 @@ func (h *ClaudeCodeAPIHandler) ClaudeModels(c *gin.Context) {
 		requestCtx = c.Request.Context()
 	}
 	models := h.Models()
-	if allowed := billing.AllowedModelsFromContext(requestCtx); len(allowed) > 0 {
+	if billing.AllowedModelsFromContext(requestCtx) != nil {
 		filtered := make([]map[string]any, 0, len(models))
 		for _, model := range models {
 			id, _ := model["id"].(string)

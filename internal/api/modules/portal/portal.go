@@ -25,7 +25,8 @@ type Store interface {
 	CreateUser(ctx context.Context, email, passwordHash, displayName string) (store.User, error)
 	GetUserByEmail(ctx context.Context, email string) (store.User, error)
 	GetUserByID(ctx context.Context, id string) (store.User, error)
-	CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string) (store.APIKeyRecord, error)
+	CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string, policies ...store.APIKeyPolicy) (store.APIKeyRecord, error)
+	UpdateAPIKeyPolicy(ctx context.Context, userID, keyID string, policy store.APIKeyPolicy) (store.APIKeyRecord, error)
 	ListAPIKeys(ctx context.Context, userID string) ([]store.APIKeyRecord, error)
 	RevokeAPIKey(ctx context.Context, userID, keyID string) error
 	GetWalletBalance(ctx context.Context, userID string) (string, error)
@@ -48,6 +49,11 @@ type Store interface {
 	AccountAliases(ctx context.Context) (map[string]string, error)
 	AggregateUsageByDay(ctx context.Context, userID string, days int) ([]store.DailyUsageStat, error)
 	AggregateUsageByModel(ctx context.Context, userID string, days int) ([]store.ModelUsageStat, error)
+	GetPortalSettings(ctx context.Context) (store.PortalSettings, error)
+	SavePortalSettings(ctx context.Context, settings store.PortalSettings, actor string) (store.PortalSettings, error)
+	ListPointPrices(ctx context.Context) ([]store.PointPrice, error)
+	SavePointPrice(ctx context.Context, price store.PointPrice, actor string) (store.PointPrice, error)
+	ConsumeHelperAllowance(ctx context.Context, userID string, limit, globalLimit int) (bool, error)
 }
 
 // Module bundles the portal dependencies and exposes route registration.
@@ -60,6 +66,7 @@ type Module struct {
 	notifier        billing.Notifier
 	emailSender     billing.EmailSender
 	loginCodes      *billing.LoginCodeStore
+	helper          HelperReply
 }
 
 // New builds a portal module. A nil keyGen falls back to the default 32-byte
@@ -121,6 +128,7 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	// Public config (lets the UI know which auth methods are available) and
 	// passwordless email-code login.
 	r.GET("/config", m.handlePortalConfig)
+	r.GET("/public", m.handlePublicSite)
 	r.POST("/login/code/request", m.handleRequestLoginCode)
 	r.POST("/login/code/verify", m.handleVerifyLoginCode)
 
@@ -128,12 +136,15 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.Use(m.AuthMiddleware())
 	authed.GET("/me", m.handleMe)
 	authed.POST("/change-password", m.handleChangePassword)
+	authed.POST("/assistant", m.handleAssistant)
 	authed.GET("/wallet", m.handleWallet)
 	authed.GET("/usage", m.handleUsage)
 	authed.GET("/usage/filters", m.handleUsageFilters)
 	authed.GET("/usage/stats", m.handleUsageStats)
 	authed.GET("/api-keys", m.handleListKeys)
 	authed.POST("/api-keys", m.handleCreateKey)
+	authed.PUT("/api-keys/:id/models", m.handleUpdateKeyPolicy)
+	authed.GET("/api-key-models", m.handleKeyModels)
 	authed.DELETE("/api-keys/:id", m.handleRevokeKey)
 	// Customer-safe labels for the user's own allowed accounts.
 	authed.GET("/account-labels", m.handleMyAccountLabels)
@@ -163,6 +174,10 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	admin.GET("/models", m.handleAdminListModels)
 	admin.GET("/accounts", m.handleAdminListAccounts)
 	admin.POST("/accounts/alias", m.handleAdminSetAccountAlias)
+	admin.GET("/settings", m.handleAdminGetSettings)
+	admin.PUT("/settings", m.handleAdminSaveSettings)
+	admin.GET("/pricing", m.handleAdminGetPrices)
+	admin.PUT("/pricing", m.handleAdminSavePrice)
 }
 
 // defaultKeyGenerator produces a 32-byte random key encoded as

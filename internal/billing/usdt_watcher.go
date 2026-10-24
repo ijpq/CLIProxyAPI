@@ -151,7 +151,7 @@ type tronTransfer struct {
 func (w *USDTTronWatcher) fetchRecentTransfers(ctx context.Context) (map[string]tronTransfer, error) {
 	since := time.Now().Add(-24 * time.Hour).UnixMilli()
 	url := fmt.Sprintf(
-		"%s/v1/accounts/%s/transactions/trc20?only_to=true&contract_address=%s&min_timestamp=%d&limit=200",
+		"%s/v1/accounts/%s/transactions/trc20?only_to=true&only_confirmed=true&contract_address=%s&min_timestamp=%d&limit=200",
 		w.tronAPIBase, w.walletAddress, usdtTRC20Contract, since,
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -195,7 +195,7 @@ func (w *USDTTronWatcher) fetchRecentTransfers(ctx context.Context) (map[string]
 		if !strings.EqualFold(row.Type, "Transfer") {
 			continue
 		}
-		if !strings.EqualFold(row.TokenInfo.Address, usdtTRC20Contract) {
+		if row.TokenInfo.Address != usdtTRC20Contract {
 			continue
 		}
 		raw, err := strconv.ParseInt(row.Value, 10, 64)
@@ -203,8 +203,8 @@ func (w *USDTTronWatcher) fetchRecentTransfers(ctx context.Context) (map[string]
 			continue
 		}
 		decimals := row.TokenInfo.Decimals
-		if decimals <= 0 {
-			decimals = 6
+		if decimals != 6 {
+			continue
 		}
 		amount := float64(raw) / pow10f(decimals)
 		out[strings.ToLower(row.TransactionID)] = tronTransfer{
@@ -229,9 +229,12 @@ func (w *USDTTronWatcher) tryConfirm(ctx context.Context, order store.TopupOrder
 		// the next cycle or admin review.
 		return
 	}
-	if !strings.EqualFold(transfer.To, order.WalletAddress) {
+	if transfer.To != order.WalletAddress {
 		log.Warnf("billing: tx %s recipient %s does not match order %s wallet %s",
 			transfer.TxHash, transfer.To, order.ID, order.WalletAddress)
+		return
+	}
+	if !order.CreatedAt.IsZero() && transfer.Timestamp.Before(order.CreatedAt) {
 		return
 	}
 	expected, err := strconv.ParseFloat(strings.TrimSpace(order.Amount), 64)

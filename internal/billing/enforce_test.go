@@ -185,3 +185,19 @@ func TestExecutionAccessMetadataCopiesRestrictions(t *testing.T) {
 		t.Fatalf("metadata shares mutable inputs: %#v", metadata)
 	}
 }
+
+func TestExplicitEmptyModelPolicy(t *testing.T) {
+	ctx := WithAllowedModels(context.Background(), []string{})
+	for _, model := range []string{"", "any-model", "gpt-test(high)"} {
+		if ModelAllowed(ctx, model) {
+			t.Fatal("empty policy allowed", model)
+		}
+	}
+	metadata := ExecutionAccessMetadata(ctx, nil, "any-model")
+	if metadata["models_restricted"] != true {
+		t.Fatal("empty restriction lost")
+	}
+	if !ModelAllowed(WithAllowedModels(context.Background(), nil), "any-model") {
+		t.Fatal("nil policy changed legacy unrestricted access")
+	}
+}

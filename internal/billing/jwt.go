@@ -66,7 +66,7 @@ func (i *TokenIssuer) Parse(raw string) (*TokenClaims, error) {
 			return nil, ErrInvalidToken
 		}
 		return i.secret, nil
-	})
+	}, jwt.WithExpirationRequired())
 	if err != nil || parsed == nil || !parsed.Valid {
 		return nil, ErrInvalidToken
 	}

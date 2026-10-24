@@ -1848,6 +1848,9 @@ func stringSetFromMetadata(meta map[string]any, key string, canonicalModel bool)
 }
 
 func validateAllowedModel(meta map[string]any, fallback string) error {
+	if restricted, _ := meta[cliproxyexecutor.ModelsRestrictedMetadataKey].(bool); restricted && len(allowedModelsFromMetadata(meta)) == 0 {
+		return &Error{Code: "model_not_allowed", Message: "model not allowed for this account", HTTPStatus: http.StatusForbidden}
+	}
 	allowed := allowedModelsFromMetadata(meta)
 	if allowed == nil {
 		return nil

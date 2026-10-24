@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -86,6 +87,12 @@ func (m *Module) handleCreateTopupOrder(c *gin.Context) {
 	switch {
 	case errors.Is(createErr, store.ErrTopupAmountCollision):
 		c.JSON(http.StatusConflict, gin.H{"error": "unable to generate unique amount, try a different base amount"})
+		return
+	case errors.Is(createErr, store.ErrPointsRateMissing):
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "points exchange rate is not configured for this payment currency"})
+		return
+	case errors.Is(createErr, store.ErrLegacyBalance):
+		c.JSON(409, gin.H{"error": "historical wallet must be reconciled before points top-ups"})
 		return
 	case createErr != nil:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "create order failed"})
@@ -191,7 +198,10 @@ func (m *Module) handleAdminListTopupOrders(c *gin.Context) {
 
 func (m *Module) handleAdminConfirmTopupOrder(c *gin.Context) {
 	var req adminConfirmRequest
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
+		return
+	}
 	order, err := m.store.ConfirmTopupOrder(c.Request.Context(), c.Param("id"), req.Note)
 	switch {
 	case errors.Is(err, store.ErrTopupOrderNotFound):
@@ -244,11 +254,14 @@ func (m *Module) createOrderWithUniqueSuffix(
 }
 
 func topupView(o store.TopupOrder) gin.H {
-	return gin.H{
+	v := gin.H{
 		"id":             o.ID,
 		"user_id":        o.UserID,
 		"method":         o.Method,
 		"amount":         o.Amount,
+		"points_amount":  o.PointsAmount,
+		"exchange_rate":  o.ExchangeRate,
+		"unit":           "POINTS",
 		"currency":       o.Currency,
 		"network":        o.Network,
 		"wallet_address": o.WalletAddress,
@@ -260,4 +273,13 @@ func topupView(o store.TopupOrder) gin.H {
 		"confirmed_at":   nullableTime(o.ConfirmedAt),
 		"expires_at":     nullableTime(o.ExpiresAt),
 	}
+	if o.ExchangeRate == "" {
+		v["unit"] = "LEGACY"
+	}
+	// Fiat orders snapshot the payment QR URL in wallet_address at creation.
+	if (o.Method == "wechat" || o.Method == "alipay") &&
+		(strings.HasPrefix(o.WalletAddress, "https://") || strings.HasPrefix(o.WalletAddress, "http://")) {
+		v["qr_code_url"] = o.WalletAddress
+	}
+	return v
 }

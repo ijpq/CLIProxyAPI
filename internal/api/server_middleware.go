@@ -230,8 +230,8 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 				if allowed := result.Metadata[billing.MetadataKeyAllowedAuthIDs]; allowed != "" {
 					reqCtx = billing.WithAllowedAuthIDs(reqCtx, billing.SplitCSV(allowed))
 				}
-				if allowed := result.Metadata[billing.MetadataKeyAllowedModels]; allowed != "" {
-					reqCtx = billing.WithAllowedModels(reqCtx, billing.SplitCSV(allowed))
+				if allowed := billing.ModelsFromMetadata(result.Metadata); allowed != nil {
+					reqCtx = billing.WithAllowedModels(reqCtx, allowed)
 				}
 				c.Request = c.Request.WithContext(reqCtx)
 			}
@@ -408,6 +408,6 @@ func revalidateRealtimeClientSecret(ctx context.Context, manager *sdkaccess.Mana
 	authorization.IssuerAPIKeyID = result.Metadata[billing.MetadataKeyAPIKeyID]
 	authorization.IssuerUnbilled = result.Metadata[billing.MetadataKeyUnbilled] == "1"
 	authorization.AllowedAuthIDs = billing.SplitCSV(result.Metadata[billing.MetadataKeyAllowedAuthIDs])
-	authorization.AllowedModels = billing.SplitCSV(result.Metadata[billing.MetadataKeyAllowedModels])
+	authorization.AllowedModels = billing.ModelsFromMetadata(result.Metadata)
 	return authorization, nil
 }

@@ -331,3 +331,14 @@ func TestEnrichContextWithSessionHierarchyFromBody(t *testing.T) {
 		t.Fatalf("OpenCode parent_id session = (%q, %q), want (session:opencode-sess-1, session:opencode-root-1)", meta8.SessionID, meta8.ParentSessionID)
 	}
 }
+
+func TestEmptyModelPolicySurvivesExecutionMetadata(t *testing.T) {
+	ctx := WithAllowedModels(context.Background(), []string{})
+	if modelAllowedFromContext(ctx, "any-model") {
+		t.Fatal("empty policy allowed execution")
+	}
+	metadata := requestExecutionMetadata(ctx)
+	if metadata[coreexecutor.ModelsRestrictedMetadataKey] != true {
+		t.Fatal("empty restriction lost from execution metadata")
+	}
+}

@@ -109,7 +109,7 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 }
 
 func filterAllowedModelMaps(ctx context.Context, models []map[string]any, idField string) []map[string]any {
-	if len(billing.AllowedModelsFromContext(ctx)) == 0 {
+	if billing.AllowedModelsFromContext(ctx) == nil {
 		return models
 	}
 	filtered := make([]map[string]any, 0, len(models))

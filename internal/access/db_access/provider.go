@@ -197,7 +197,8 @@ func (p *provider) result(lookup store.APIKeyLookup, source string) *sdkaccess.R
 	if len(lookup.AllowedAuthIDs) > 0 {
 		meta[billing.MetadataKeyAllowedAuthIDs] = store.EncodeAuthIDs(lookup.AllowedAuthIDs)
 	}
-	if len(lookup.AllowedModels) > 0 {
+	if lookup.AllowedModels != nil {
+		meta[billing.MetadataKeyModelsRestricted] = "1"
 		meta[billing.MetadataKeyAllowedModels] = store.EncodeAuthIDs(lookup.AllowedModels)
 	}
 	return &sdkaccess.Result{Provider: p.Identifier(), Principal: lookup.UserID, Metadata: meta}

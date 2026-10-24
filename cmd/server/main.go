@@ -786,7 +786,12 @@ func main() {
 					password = localMgmtPassword
 				}
 
-				billingOpts := setupBilling(context.Background(), pgStoreInst)
+				billingOpts, errBilling := setupBilling(context.Background(), pgStoreInst)
+				if errBilling != nil {
+					restoreIO()
+					log.WithError(errBilling).Error("billing initialization failed; server was not started")
+					return
+				}
 				cancel, done := cmd.StartServiceBackgroundWithPluginHost(cfg, configFilePath, password, pluginHost, append(serverOptions, billingOpts...)...)
 
 				client := tui.NewClient(cfg.Port, password)
@@ -833,7 +838,11 @@ func main() {
 			managementasset.StartAutoUpdater(context.Background(), configFilePath)
 			misc.StartAntigravityVersionUpdater(context.Background())
 			registry.SetLocalModelCatalogs(localModel)
-			billingOpts := setupBilling(context.Background(), pgStoreInst)
+			billingOpts, errBilling := setupBilling(context.Background(), pgStoreInst)
+			if errBilling != nil {
+				log.WithError(errBilling).Error("billing initialization failed; server was not started")
+				return
+			}
 			cmd.StartServiceWithPluginHost(cfg, configFilePath, password, pluginHost, append(serverOptions, billingOpts...)...)
 		}
 	}

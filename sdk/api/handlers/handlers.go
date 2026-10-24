@@ -294,7 +294,8 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 	if allowed := allowedAuthIDsFromContext(ctx); len(allowed) > 0 {
 		meta[coreexecutor.AllowedAuthIDsMetadataKey] = allowed
 	}
-	if allowed := allowedModelsFromContext(ctx); len(allowed) > 0 {
+	if allowed := allowedModelsFromContext(ctx); allowed != nil {
+		meta[coreexecutor.ModelsRestrictedMetadataKey] = true
 		meta[coreexecutor.AllowedModelsMetadataKey] = allowed
 	}
 	if selectedCallback := selectedAuthIDCallbackFromContext(ctx); selectedCallback != nil {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,6 +33,7 @@ type changePasswordRequest struct {
 }
 
 type createKeyRequest struct {
+	store.APIKeyPolicy
 	Name string `json:"name"`
 }
 
@@ -63,7 +65,7 @@ func (m *Module) handleRegister(c *gin.Context) {
 	m.notify(c.Request.Context(), fmt.Sprintf("🆕 新用户注册: %s", user.Email))
 	c.JSON(http.StatusCreated, gin.H{
 		"token": token,
-		"user":  userView(user),
+		"user":  customerUserView(user),
 	})
 }
 
@@ -82,7 +84,7 @@ func (m *Module) handleLogin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
 		return
 	}
-	if user.Status != "" && user.Status != "active" {
+	if user.Status != "active" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "account suspended"})
 		return
 	}
@@ -97,7 +99,7 @@ func (m *Module) handleLogin(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
-		"user":  userView(user),
+		"user":  customerUserView(user),
 	})
 }
 
@@ -136,17 +138,21 @@ func (m *Module) handleMe(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user": userView(user)})
+	c.JSON(http.StatusOK, gin.H{"user": customerUserView(user)})
 }
 
 func (m *Module) handleWallet(c *gin.Context) {
 	userID := userIDFromGin(c)
 	bal, err := m.store.GetWalletBalance(c.Request.Context(), userID)
+	if errors.Is(err, store.ErrLegacyBalance) {
+		c.JSON(http.StatusConflict, gin.H{"error": "historical balance requires administrator reconciliation", "unit": "LEGACY"})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "wallet lookup failed"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"balance": bal})
+	c.JSON(http.StatusOK, gin.H{"balance": bal, "unit": "POINTS"})
 }
 
 func (m *Module) handleUsage(c *gin.Context) {
@@ -172,10 +178,8 @@ func (m *Module) handleUsage(c *gin.Context) {
 		AuthID: strings.TrimSpace(c.Query("auth_id")),
 	}
 
-	// The super admin sees usage across all users (with each row's owner);
-	// everyone else sees only their own. Trust the JWT admin claim on the fast
-	// path, but fall back to the DB so a token issued before the account was
-	// promoted (BILLING_ADMIN_EMAIL) still gets the admin-wide view.
+	// The authentication middleware resolves current administrator access.
+	// Everyone else sees only their own usage.
 	admin := m.isAdmin(c)
 	var records []store.UsageRecord
 	var err error
@@ -183,6 +187,25 @@ func (m *Module) handleUsage(c *gin.Context) {
 		filter.UserID = strings.TrimSpace(c.Query("user_id"))
 		records, err = m.store.ListAllUsage(c.Request.Context(), before, limit, filter)
 	} else {
+		if filter.AuthID != "" {
+			_, ids, _, lookupErr := m.store.UsageFilterOptions(c.Request.Context(), userID)
+			if lookupErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "filter options failed"})
+				return
+			}
+			resolved := ""
+			for _, id := range ids {
+				if billing.AccountHandle(id) == filter.AuthID {
+					resolved = id
+					break
+				}
+			}
+			if resolved == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account filter"})
+				return
+			}
+			filter.AuthID = resolved
+		}
 		records, err = m.store.ListUsage(c.Request.Context(), userID, before, limit, filter)
 	}
 	if err != nil {
@@ -190,23 +213,24 @@ func (m *Module) handleUsage(c *gin.Context) {
 		return
 	}
 	out := make([]gin.H, 0, len(records))
+	var aliases map[string]string
+	if !admin {
+		aliases, _ = m.store.AccountAliases(c.Request.Context())
+	}
 	for _, r := range records {
-		out = append(out, usageView(r))
+		v := usageView(r)
+		if !admin && r.AuthID != "" {
+			v["auth_id"] = billing.AccountHandle(r.AuthID)
+			v["auth_label"] = billing.SafeAccountLabel(r.AuthID, aliases)
+		}
+		out = append(out, v)
 	}
 	c.JSON(http.StatusOK, gin.H{"records": out, "scope": map[bool]string{true: "all", false: "self"}[admin]})
 }
 
-// isAdmin reports whether the caller is the super admin, trusting the JWT claim
-// on the fast path and falling back to the DB flag (covers a token issued before
-// the account was promoted via BILLING_ADMIN_EMAIL).
+// isAdmin reads the current database-backed decision from AuthMiddleware.
 func (m *Module) isAdmin(c *gin.Context) bool {
-	if isAdminFromGin(c) {
-		return true
-	}
-	if u, err := m.store.GetUserByID(c.Request.Context(), userIDFromGin(c)); err == nil && u.IsAdmin {
-		return true
-	}
-	return false
+	return isAdminFromGin(c)
 }
 
 // handleUsageFilters returns the distinct filter values present in the caller's
@@ -227,7 +251,11 @@ func (m *Module) handleUsageFilters(c *gin.Context) {
 	aliases, _ := m.store.AccountAliases(c.Request.Context())
 	accounts := make([]gin.H, 0, len(authIDs))
 	for _, id := range authIDs {
-		accounts = append(accounts, gin.H{"id": id, "label": billing.SafeAccountLabel(id, aliases)})
+		viewID := id
+		if !admin {
+			viewID = billing.AccountHandle(id)
+		}
+		accounts = append(accounts, gin.H{"id": viewID, "label": billing.SafeAccountLabel(id, aliases)})
 	}
 	resp := gin.H{
 		"scope":    map[bool]string{true: "all", false: "self"}[admin],
@@ -255,23 +283,33 @@ func (m *Module) handleListKeys(c *gin.Context) {
 	for _, k := range keys {
 		out = append(out, apiKeyView(k))
 	}
-	c.JSON(http.StatusOK, gin.H{"keys": out})
+	c.JSON(http.StatusOK, gin.H{"keys": out, "max_active_keys": store.MaxActiveAPIKeys})
 }
 
 func (m *Module) handleCreateKey(c *gin.Context) {
 	userID := userIDFromGin(c)
 	var req createKeyRequest
-	_ = c.ShouldBindJSON(&req) // name is optional
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
+		return
+	}
 
-	// Per-user access controls (unbilled / allowed models / allowed accounts)
-	// live on the user and are managed by the super admin, so key creation is
-	// a plain operation available to every user.
+	policy, err := store.NormalizeKeyPolicy(req.APIKeyPolicy)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model policy"})
+		return
+	}
+	// Key policy can only narrow the owner's effective access.
 	raw, err := m.keyGen()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate key failed"})
 		return
 	}
-	rec, err := m.store.CreateAPIKey(c.Request.Context(), userID, store.HashAPIKey(raw), keyPrefix(raw), req.Name)
+	rec, err := m.store.CreateAPIKey(c.Request.Context(), userID, store.HashAPIKey(raw), keyPrefix(raw), req.Name, policy)
+	if errors.Is(err, store.ErrAPIKeyLimit) {
+		c.JSON(http.StatusConflict, gin.H{"error": "最多可创建 10 个有效 API Key，请先吊销不用的 Key。"})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "create key failed"})
 		return
@@ -308,7 +346,7 @@ func (m *Module) handleMyAccountLabels(c *gin.Context) {
 	aliases, _ := m.store.AccountAliases(c.Request.Context())
 	labels := make(map[string]string, len(user.AllowedAuthIDs))
 	for _, id := range user.AllowedAuthIDs {
-		labels[id] = billing.SafeAccountLabel(id, aliases)
+		labels[billing.AccountHandle(id)] = billing.SafeAccountLabel(id, aliases)
 	}
 	c.JSON(http.StatusOK, gin.H{"labels": labels})
 }
@@ -461,6 +499,18 @@ func (m *Module) handleResetAccountCredit(c *gin.Context) {
 	c.JSON(http.StatusOK, accountQuotaView(billing.FetchAccountQuota(ctx, id, provider, label), true))
 }
 
+// customerUserView uses the same opaque account references as quota endpoints.
+// Administrative ACL editing retains raw IDs through userView.
+func customerUserView(u store.User) gin.H {
+	v := userView(u)
+	handles := make([]string, 0, len(u.AllowedAuthIDs))
+	for _, id := range u.AllowedAuthIDs {
+		handles = append(handles, billing.AccountHandle(id))
+	}
+	v["allowed_auth_ids"] = handles
+	return v
+}
+
 func userView(u store.User) gin.H {
 	models := u.AllowedModels
 	if models == nil {
@@ -492,12 +542,14 @@ func userCanReset(u store.User) bool {
 
 func apiKeyView(k store.APIKeyRecord) gin.H {
 	return gin.H{
-		"id":           k.ID,
-		"name":         k.Name,
-		"key_prefix":   k.KeyPrefix,
-		"created_at":   k.CreatedAt,
-		"last_used_at": nullableTime(k.LastUsedAt),
-		"revoked_at":   nullableTime(k.RevokedAt),
+		"id":             k.ID,
+		"name":           k.Name,
+		"key_prefix":     k.KeyPrefix,
+		"model_scope":    k.ModelScope,
+		"allowed_models": append([]string{}, k.AllowedModels...),
+		"created_at":     k.CreatedAt,
+		"last_used_at":   nullableTime(k.LastUsedAt),
+		"revoked_at":     nullableTime(k.RevokedAt),
 	}
 }
 
@@ -514,6 +566,8 @@ func usageView(r store.UsageRecord) gin.H {
 		"cache_read_tokens":  r.CacheReadTokens,
 		"cache_write_tokens": r.CacheWriteTokens,
 		"cost":               r.Cost,
+		"price_version":      r.PriceVersion,
+		"unit":               r.Unit,
 		"status":             r.Status,
 		"error_message":      r.ErrorMessage,
 		"auth_id":            r.AuthID,

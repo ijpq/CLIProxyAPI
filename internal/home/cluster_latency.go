@@ -284,11 +284,9 @@ func (c *Client) probeClusterLatency(ctx context.Context, address string) (time.
 	options.TLSConfig = tlsConfig
 	options.ReadTimeout, options.WriteTimeout, options.MaxRetries = -1, -1, -1
 	options.PoolSize = 1
-	options.Dialer = redis.NewDialer(options)
+	options.Dialer = cancelableRedisDialer(ctx, redis.NewDialer(options))
 	probe := redis.NewClient(options)
-	stopCancel := context.AfterFunc(ctx, func() { _ = probe.Close() })
 	defer func() {
-		stopCancel()
 		_ = probe.Close()
 	}()
 	if errWarmup := probe.Ping(ctx).Err(); errWarmup != nil {

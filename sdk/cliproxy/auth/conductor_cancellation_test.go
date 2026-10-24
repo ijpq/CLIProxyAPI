@@ -184,7 +184,8 @@ func TestManagerMutationNilContext(t *testing.T) {
 func TestWrapStreamResultDoesNotPenalizeAuthForClientCancellation(t *testing.T) {
 	mgr := NewManager(nil, nil, nil)
 	auth := &Auth{ID: "auth-1", Provider: "codex", Metadata: map[string]any{"type": "codex"}}
-	if _, errRegister := mgr.Register(WithSkipPersist(context.Background()), auth); errRegister != nil {
+	registered, errRegister := mgr.Register(WithSkipPersist(context.Background()), auth)
+	if errRegister != nil {
 		t.Fatalf("Register returned error: %v", errRegister)
 	}
 
@@ -194,7 +195,7 @@ func TestWrapStreamResultDoesNotPenalizeAuthForClientCancellation(t *testing.T) 
 	remaining <- cliproxyexecutor.StreamChunk{Err: context.Canceled}
 	close(remaining)
 
-	result := mgr.wrapStreamResult(ctx, auth, "codex", "gpt-5", "gpt-5", nil, nil, remaining, OAuthModelAliasResult{}, false, cliproxyexecutor.Options{})
+	result := mgr.wrapStreamResult(ctx, registered, "codex", "gpt-5", "gpt-5", nil, nil, remaining, OAuthModelAliasResult{}, false, cliproxyexecutor.Options{}, mgr.nextExecutionSeq())
 	for range result.Chunks {
 	}
 

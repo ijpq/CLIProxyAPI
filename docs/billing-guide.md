@@ -2,6 +2,8 @@
 
 > 开发者接手、架构、发布流程和历史踩坑请先阅读 [CLIProxyAPI Fork 开发交接手册](DEVELOPER_HANDOFF_CN.md)。
 
+> v8.0.41 积分版本：升级前备份数据库并验证恢复，配置专用持久计费日志目录，核实管理员身份。历史余额保留 LEGACY 标记，需对账后才可启用积分收费。
+
 ## 一、部署配置
 
 在 `.env` 或 Docker 环境变量中配置以下内容（按需启用）：
@@ -12,7 +14,7 @@
 # ===== 必填 =====
 BILLING_ENABLED=true
 BILLING_JWT_SECRET=<openssl rand -hex 32 生成>
-BILLING_ADMIN_EMAIL=you@example.com      # 你的注册邮箱，启动后自动升为管理员
+BILLING_ADMIN_USER_ID=<已核实归属的用户 UUID> # 不再按未验证邮箱自动提权
 
 # 计费专用数据库（billing 表自动创建）。这是 billing 自己的库，
 # 与 PGSTORE_DSN 无关：只建 billing 的表，不接管 auth/config 存储——
@@ -21,9 +23,10 @@ BILLING_DATABASE_URL=postgres://user:pass@host:5432/dbname
 # 兼容：若未设 BILLING_DATABASE_URL 但设了 PGSTORE_DSN，billing 会复用那个库
 # （但那种模式下 Postgres 会同时接管 auth/config 存储，文件不再被读取——不推荐）。
 
-# ===== 定价 =====
-BILLING_PRICING_FILE=/data/pricing.json  # 模型定价表路径
-BILLING_MARKUP=1.20                       # 在上游成本上加价 20%
+# ===== 积分与可靠结算 =====
+BILLING_EVENT_DIR=/data/billing-events   # 必须挂载专用持久卷，单实例独占
+# 兑换率、模型积分价格和助手配置在 Portal 管理页设置。
+# 旧 BILLING_PRICING_FILE 必须清空；本版本拒绝把旧货币价格自动改作积分。
 
 # ===== 限流 =====
 BILLING_RATE_PER_SEC=5                    # 每用户每秒请求数（0=不限）
@@ -33,7 +36,7 @@ BILLING_UNBILLED_BYPASS_RATE_LIMIT=false  # 免余额(unbilled)的 Key 是否也
 
 # ===== USDT 充值 =====
 BILLING_USDT_TRC20=T...你的TRC20钱包地址
-BILLING_USDT_AUTO_CONFIRM=true
+BILLING_USDT_AUTO_CONFIRM=false           # 共享地址无法证明付款归属；true 会阻止启动
 BILLING_TRONGRID_API_KEY=<可选>
 BILLING_USDT_POLL_INTERVAL=30s
 BILLING_USDT_AMOUNT_TOLERANCE=0.005
@@ -63,34 +66,20 @@ BILLING_LOGIN_CODE_COOLDOWN=60s           # 同一邮箱两次请求最小间隔
 
 > 邮箱验证码登录：用户在登录页选「验证码」→ 填邮箱 → 收验证码 → 登录。**未注册的邮箱首次验证码登录即自动创建账号**。当前这类账号会写入随机密码，而修改密码接口仍要求原密码，因此暂时只能继续使用验证码登录，不能自行补设密码；这是待修问题。
 
-### pricing.json 示例
+### 管理员设置积分价格
 
-```json
-{
-  "openai/gpt-4o": {
-    "input_per_million": 2.50,
-    "output_per_million": 10.00,
-    "cache_read_per_million": 1.25,
-    "cache_write_per_million": 3.75
-  },
-  "openai/gpt-4.1-mini": {
-    "input_per_million": 0.40,
-    "output_per_million": 1.60
-  },
-  "anthropic/claude-sonnet-4-5-20250514": {
-    "input_per_million": 3.00,
-    "output_per_million": 15.00,
-    "cache_read_per_million": 0.30,
-    "cache_write_per_million": 3.75
-  },
-  "google/gemini-2.5-pro": {
-    "input_per_million": 1.25,
-    "output_per_million": 10.00
-  }
-}
-```
+打开 Portal → 管理 →「站点、积分兑换与配置助手」与「模型积分定价」。
 
-定价键格式为 `provider/model`（优先匹配）或 `model`（回退匹配）。未匹配的模型用量仍会记录，但费用为 0。
+- 分别填写 1 CNY、1 USDT 兑换的积分数。空值表示未开放该币种充值；没有默认报价。
+- 每个模型设置输入、输出、缓存读取、缓存写入的每 100 万 token 积分单价。缓存价格 0 表示该项免费。
+- 未定价或停用的模型拒绝付费调用。管理员保存后即时用于新请求，无需重启。
+- 请求绑定开始时的价格版本；配置修改有版本冲突检查和数据库审计记录。
+- 订单保存付款币种、实付金额、兑换率与到账积分。旧订单不会随兑换率变化重新计算。
+- 历史货币余额和用量保留 LEGACY 标记，不自动换算，不计入新的积分统计。历史钱包对账完成前拒绝积分充值与扣款。
+
+启用 billing 后，数据库、JWT、建表、持久事件目录或待结算事件恢复失败会阻止启动。已发布用量事件先同步写本机持久日志，再原子写入用量、积分扣款和流水。数据库故障后自动重放，同一事件 ID 只结算一次；不同 continuation 或子调用事件分别结算。
+
+此机制不等于金额预留。并发请求和单次高消费仍需冻结预算，服务在生成用量事件前崩溃也需未完成请求对账，尚未完成这些上线条件。
 
 ---
 
@@ -104,7 +93,7 @@ BILLING_LOGIN_CODE_COOLDOWN=60s           # 同一邮箱两次请求最小间隔
 http://你的服务器地址:端口/portal/ui/
 ```
 
-点击「注册」，填写邮箱、密码（至少 8 位），完成注册后自动登录。
+首页展示模型积分价格、可核实的协议支持与文档入口。点击「开始使用」注册，填写邮箱和密码（至少 8 位），完成后自动登录。
 
 ### 2.2 创建 API Key
 
@@ -164,7 +153,7 @@ const client = new OpenAI({
 - 复制显示的钱包地址
 - 向该地址转入 **精确金额** 的 USDT
 - 粘贴交易哈希（TX Hash）并提交
-- 链上确认后自动到账（约 30 秒）
+- 等待管理员核对链上实际到账与付款归属后，按订单快照增加积分
 
 **微信/支付宝：**
 - 扫描显示的收款二维码
@@ -191,19 +180,21 @@ const client = new OpenAI({
 
 ### 3.1 首次成为管理员
 
-1. 在环境变量中设置 `BILLING_ADMIN_EMAIL=你的邮箱`
-2. 在 Portal 页面用该邮箱注册
-3. 重启服务（或下次启动时会自动提升）
-4. 重新登录后左侧导航会出现「管理」入口
+1. 先创建你自己控制的 Portal 账号，在预发布或维护环境核实账号归属。
+2. 由运营方选定该账号的 UUID，设置 `BILLING_ADMIN_USER_ID`。
+3. 清空旧的邮箱引导配置，按正常发布流程启动服务。
+4. 仅所选 active 账号会被提升，已有管理员仍需人工核对。
+
+仅配置旧 `BILLING_ADMIN_EMAIL` 会阻止启动，避免公共注册抢注目标邮箱后获得管理员权限。已有管理员权限保存在数据库中；已有部署可以移除旧的邮箱引导配置而不重新提升账号。
 
 ### 3.2 确认充值订单（微信/支付宝）
 
 1. 点击「管理」→ 待确认充值列表
 2. 打开你的微信/支付宝收款记录
 3. 找到金额匹配的转账（例如 100.37 元）
-4. 确认无误后点击「确认」→ 用户余额立即增加
+4. 核对付款人、到账金额、时间、收款地址和订单归属后确认 → 按订单快照增加积分
 
-USDT 充值在链上自动确认，无需手动操作。
+USDT 同样需要人工核对付款归属。公开 TX Hash、金额相符或哈希未使用过，都不能单独证明付款属于该用户。
 
 ### 3.3 手动给用户充值/调整余额
 
@@ -230,9 +221,15 @@ USDT 充值在链上自动确认，无需手动操作。
 
 ### 3.6 定价调整
 
-编辑 `BILLING_PRICING_FILE` 指向的 JSON 文件，重启服务生效。
+在「管理 → 模型积分定价」创建或编辑价格。模型名使用对客户公开的名称；输入、输出和两种缓存价格均为积分。保存后新请求生效，旧请求保留已绑定版本。
 
-加价率 `BILLING_MARKUP` 作用于所有模型：最终用户费用 = 模型单价 × token 数 × markup。
+### 3.7 宣传首页与配置助手
+
+管理员设置站点名称、公开 API Base（含 /v1）、文档 URL。文档 URL 留空时使用内置接入文档。首页不宣称未经测试的延迟、在线率或上游账号资质。
+
+配置助手默认关闭。选择一个已定价模型并显式启用，运营方承担费用。默认每人每天 20 次、全站每天 500 次、最多输出 768 token，均可由管理员修改。每日次数以 UTC 计算，失败尝试也计数。助手接受最多 8 条文本和 12 KB 上下文，不执行工具；常见密钥格式会被替换为占位符，回答按纯文本展示。用户仍不应提交真实密钥。
+
+付费请求要求 JSON 或模型 URL 明确指定模型。JSON 最大 8 MiB，不接受重复字段；当前付费入口拒绝无法在执行前绑定价格的 WebSocket 和 multipart 请求。
 
 ---
 
@@ -244,6 +241,7 @@ USDT 充值在链上自动确认，无需手动操作。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | /public | 公开站点、积分价格和兑换率 |
 | GET | /config | Portal 可用登录方式等公开配置 |
 | POST | /register | 注册 `{email, password, display_name}` |
 | POST | /login | 登录 `{email, password}` → `{token, user}` |
@@ -251,6 +249,12 @@ USDT 充值在链上自动确认，无需手动操作。
 | POST | /login/code/verify | 验证邮箱验证码并登录；未注册邮箱会创建账号 |
 
 ### 需要 Bearer Token
+
+`POST /assistant` 接受 `{messages:[{role:"user",content:"配置问题"}]}`，返回 `{reply,model,sponsored:true}`。模型和限额由服务器决定，不能由客户端选择。
+
+管理员接口新增 `GET/PUT /admin/settings` 与 `GET/PUT /admin/pricing`；保存时必须带读取到的版本号，过期版本返回 409。
+
+注册、登录和 `/me` 返回的 `user.allowed_auth_ids` 为不透明账号标识；`/account-labels` 使用相同标识作为键。普通用户 `/usage` 的 `auth_id` 和 `/usage/filters` 的账号 ID 也使用该标识，筛选时应原样传回，不能传凭据文件名。管理员用量视图和 `/admin/users`、`/admin/accounts`、权限编辑接口继续使用原始调度 ID。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|

@@ -107,14 +107,14 @@ func WithAllowedAuthIDs(ctx context.Context, authIDs []string) context.Context {
 // metadata so it is enforced after the concrete model is known, including for
 // WebSocket requests whose upgrade request has no JSON body.
 func WithAllowedModels(ctx context.Context, models []string) context.Context {
+	if models == nil {
+		return ctx
+	}
 	cleaned := make([]string, 0, len(models))
 	for _, model := range models {
 		if model = strings.TrimSpace(model); model != "" {
 			cleaned = append(cleaned, model)
 		}
-	}
-	if len(cleaned) == 0 {
-		return ctx
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -258,7 +258,7 @@ func allowedModelsFromContext(ctx context.Context) []string {
 
 func modelAllowedFromContext(ctx context.Context, requested string) bool {
 	allowed := allowedModelsFromContext(ctx)
-	if len(allowed) == 0 {
+	if allowed == nil {
 		return true
 	}
 	requested = strings.TrimSpace(thinking.ParseSuffix(requested).ModelName)

@@ -15,7 +15,7 @@ import (
 
 // ModelAccessGuard returns a gin middleware that rejects a request whose target
 // model is not in the authenticated user's allowed-models list. Users with no
-// model restriction (empty list) and non-billing requests pass through. The
+// model restriction (nil list) and non-billing requests pass through. The
 // model is read from the JSON body's "model" field (openai/claude/codex/
 // responses dialects), falling back to the URL path for Gemini-style routes.
 // When the model cannot be determined this early guard allows the request to
@@ -24,7 +24,7 @@ import (
 func ModelAccessGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		allowed := AllowedModelsFromContext(c.Request.Context())
-		if len(allowed) == 0 {
+		if allowed == nil {
 			return
 		}
 		model := requestedModel(c)
@@ -41,11 +41,11 @@ func ModelAccessGuard() gin.HandlerFunc {
 }
 
 // ModelAllowed reports whether model is permitted by the billing access state
-// attached to ctx. An empty allowlist is unrestricted; a restricted request with
+// attached to ctx. A nil allowlist is unrestricted; a restricted request with
 // no resolved model fails closed.
 func ModelAllowed(ctx context.Context, model string) bool {
 	allowed := AllowedModelsFromContext(ctx)
-	if len(allowed) == 0 {
+	if allowed == nil {
 		return true
 	}
 	requestedModel := normalizeAccessModel(model)
@@ -102,8 +102,9 @@ func ExecutionAccessMetadata(ctx context.Context, base map[string]any, requested
 	if allowed := AllowedAuthIDsFromContext(ctx); len(allowed) > 0 {
 		set(coreexecutor.AllowedAuthIDsMetadataKey, append([]string(nil), allowed...))
 	}
-	if allowed := AllowedModelsFromContext(ctx); len(allowed) > 0 {
-		set(coreexecutor.AllowedModelsMetadataKey, append([]string(nil), allowed...))
+	if allowed := AllowedModelsFromContext(ctx); allowed != nil {
+		set(coreexecutor.ModelsRestrictedMetadataKey, true)
+		set(coreexecutor.AllowedModelsMetadataKey, append([]string{}, allowed...))
 	}
 	return metadata
 }

@@ -68,3 +68,8 @@ docker-compose.override.yml
 
 # Local LLM Wiki vault
 .llm-wiki
+
+# Local accounting and coverage artifacts
+billing-events/
+portal.cover
+.points-portal-cover.out

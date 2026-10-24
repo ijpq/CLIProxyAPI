@@ -1,11 +1,13 @@
 package portal
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/billing"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/store"
 )
 
 const (
@@ -27,8 +29,22 @@ func (m *Module) AuthMiddleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
-		c.Set(ginCtxUserID, claims.UserID)
-		c.Set(ginCtxIsAdmin, claims.IsAdmin)
+		user, err := m.store.GetUserByID(c.Request.Context(), claims.UserID)
+		if errors.Is(err, store.ErrUserNotFound) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			return
+		}
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "account lookup failed"})
+			return
+		}
+		if user.Status != "active" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "account suspended"})
+			return
+		}
+		// A signed claim identifies the session; current database state decides access.
+		c.Set(ginCtxUserID, user.ID)
+		c.Set(ginCtxIsAdmin, user.IsAdmin)
 		c.Request = c.Request.WithContext(billing.WithUserID(c.Request.Context(), claims.UserID))
 		c.Next()
 	}
@@ -46,7 +62,7 @@ func isAdminFromGin(c *gin.Context) bool {
 	return admin
 }
 
-// adminOnly rejects requests whose token does not carry the admin flag.
+// adminOnly rejects requests whose current user is not an administrator.
 // Must be installed after AuthMiddleware.
 func (m *Module) adminOnly() gin.HandlerFunc {
 	return func(c *gin.Context) {

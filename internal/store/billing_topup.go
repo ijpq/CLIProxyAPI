@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billingvalue"
 )
 
 // ErrTopupOrderNotFound is returned when a topup order id does not exist or
@@ -31,7 +33,9 @@ type TopupOrder struct {
 	ID            string
 	UserID        string
 	Method        string
-	Amount        string // NUMERIC text representation
+	Amount        string // Original payment amount, not points.
+	PointsAmount  string
+	ExchangeRate  string
 	Currency      string
 	Network       string
 	WalletAddress string
@@ -53,22 +57,43 @@ func (s *PostgresStore) CreateTopupOrder(ctx context.Context, userID, method, am
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(amountStr) == "" {
 		return TopupOrder{}, fmt.Errorf("postgres store: user id and amount required")
 	}
+	if _, err := s.GetWalletBalance(ctx, userID); err != nil {
+		return TopupOrder{}, err
+	}
+	cfg, err := s.GetPortalSettings(ctx)
+	if err != nil {
+		return TopupOrder{}, err
+	}
+	rate := ""
+	switch strings.ToUpper(currency) {
+	case "CNY":
+		rate = cfg.CNYPointsPerUnit
+	case "USDT":
+		rate = cfg.USDTPointsPerUnit
+	}
+	rate, err = billingvalue.Normalize(rate, true)
+	if err != nil {
+		return TopupOrder{}, ErrPointsRateMissing
+	}
+	if _, err = billingvalue.Normalize(amountStr, true); err != nil {
+		return TopupOrder{}, err
+	}
 	var expires sql.NullTime
 	if ttl > 0 {
 		expires = sql.NullTime{Time: time.Now().Add(ttl), Valid: true}
 	}
 
 	query := fmt.Sprintf(`
-		INSERT INTO %s (user_id, method, amount, currency, network, wallet_address, expires_at)
-		VALUES ($1, $2, $3::numeric, $4, $5, $6, $7)
+		INSERT INTO %s (user_id, method, amount, currency, network, wallet_address, expires_at, exchange_rate, points_amount)
+		VALUES ($1, $2, $3::numeric, $4, $5, $6, $7, $8::numeric, TRUNC($3::numeric * $8::numeric, 6))
 		RETURNING id, user_id, method, amount::text, currency, network, wallet_address,
-		          tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at
+		          tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at, COALESCE(points_amount::text,''), COALESCE(exchange_rate::text,'')
 	`, s.fullTableName(BillingTopupOrdersTable))
 
 	var o TopupOrder
-	err := s.db.QueryRowContext(ctx, query, userID, method, amountStr, currency, network, walletAddress, expires).Scan(
+	err = s.db.QueryRowContext(ctx, query, userID, method, amountStr, currency, network, walletAddress, expires, rate).Scan(
 		&o.ID, &o.UserID, &o.Method, &o.Amount, &o.Currency, &o.Network, &o.WalletAddress,
-		&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt,
+		&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt, &o.PointsAmount, &o.ExchangeRate,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -97,13 +122,13 @@ func (s *PostgresStore) GetTopupOrder(ctx context.Context, id, userID string) (T
 	}
 	query := fmt.Sprintf(`
 		SELECT id, user_id, method, amount::text, currency, network, wallet_address,
-		       tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at
+		       tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at, COALESCE(points_amount::text,''), COALESCE(exchange_rate::text,'')
 		FROM %s WHERE %s
 	`, s.fullTableName(BillingTopupOrdersTable), where)
 	var o TopupOrder
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&o.ID, &o.UserID, &o.Method, &o.Amount, &o.Currency, &o.Network, &o.WalletAddress,
-		&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt,
+		&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt, &o.PointsAmount, &o.ExchangeRate,
 	)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -131,7 +156,7 @@ func (s *PostgresStore) ListTopupOrders(ctx context.Context, userID string, limi
 	args = append(args, limit)
 	query := fmt.Sprintf(`
 		SELECT id, user_id, method, amount::text, currency, network, wallet_address,
-		       tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at
+		       tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at, COALESCE(points_amount::text,''), COALESCE(exchange_rate::text,'')
 		FROM %s %s
 		ORDER BY created_at DESC
 		LIMIT $%d
@@ -147,7 +172,7 @@ func (s *PostgresStore) ListTopupOrders(ctx context.Context, userID string, limi
 		var o TopupOrder
 		if err := rows.Scan(
 			&o.ID, &o.UserID, &o.Method, &o.Amount, &o.Currency, &o.Network, &o.WalletAddress,
-			&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt,
+			&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt, &o.PointsAmount, &o.ExchangeRate,
 		); err != nil {
 			return nil, fmt.Errorf("postgres store: scan topup order: %w", err)
 		}
@@ -165,21 +190,23 @@ func (s *PostgresStore) SubmitTopupTxHash(ctx context.Context, userID, orderID, 
 	if s == nil || s.db == nil {
 		return TopupOrder{}, fmt.Errorf("postgres store: not initialized")
 	}
-	txHash = strings.TrimSpace(txHash)
+	txHash = strings.ToLower(strings.TrimSpace(txHash))
 	if txHash == "" {
 		return TopupOrder{}, fmt.Errorf("postgres store: tx hash required")
 	}
 	query := fmt.Sprintf(`
 		UPDATE %s
 		SET tx_hash = $3, status = 'submitted', submitted_at = NOW()
-		WHERE id = $1 AND user_id = $2 AND status IN ('pending', 'submitted')
+		WHERE id = $1 AND user_id = $2
+		  AND (status = 'pending' OR (status = 'submitted' AND LOWER(BTRIM(tx_hash)) = $3))
+		  AND (expires_at IS NULL OR expires_at > clock_timestamp())
 		RETURNING id, user_id, method, amount::text, currency, network, wallet_address,
-		          tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at
+		          tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at, COALESCE(points_amount::text,''), COALESCE(exchange_rate::text,'')
 	`, s.fullTableName(BillingTopupOrdersTable))
 	var o TopupOrder
 	err := s.db.QueryRowContext(ctx, query, orderID, userID, txHash).Scan(
 		&o.ID, &o.UserID, &o.Method, &o.Amount, &o.Currency, &o.Network, &o.WalletAddress,
-		&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt,
+		&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt, &o.PointsAmount, &o.ExchangeRate,
 	)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -214,10 +241,13 @@ func (s *PostgresStore) ConfirmTopupOrder(ctx context.Context, orderID, adminNot
 
 	// Lock the order row and grab the fields we need.
 	lockQuery := fmt.Sprintf(`
-		SELECT user_id, amount::text, status FROM %s WHERE id = $1 FOR UPDATE
+		SELECT user_id, COALESCE(points_amount::text,''), status,
+		       expires_at IS NOT NULL AND expires_at <= clock_timestamp()
+		FROM %s WHERE id = $1 FOR UPDATE
 	`, s.fullTableName(BillingTopupOrdersTable))
 	var userID, amountStr, status string
-	err = tx.QueryRowContext(ctx, lockQuery, orderID).Scan(&userID, &amountStr, &status)
+	var expired bool
+	err = tx.QueryRowContext(ctx, lockQuery, orderID).Scan(&userID, &amountStr, &status, &expired)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		err = ErrTopupOrderNotFound
@@ -226,7 +256,11 @@ func (s *PostgresStore) ConfirmTopupOrder(ctx context.Context, orderID, adminNot
 		err = fmt.Errorf("postgres store: lock topup order: %w", err)
 		return TopupOrder{}, err
 	}
-	if status == "confirmed" || status == "cancelled" || status == "expired" {
+	if amountStr == "" {
+		err = ErrPointsRateMissing
+		return TopupOrder{}, err
+	}
+	if (status != "pending" && status != "submitted") || expired {
 		err = ErrTopupOrderNotPending
 		return TopupOrder{}, err
 	}
@@ -234,14 +268,19 @@ func (s *PostgresStore) ConfirmTopupOrder(ctx context.Context, orderID, adminNot
 	// Credit wallet (upsert handles the zero-wallet case for newly-created
 	// users who have not had any prior activity).
 	upsertWallet := fmt.Sprintf(`
-		INSERT INTO %s (user_id, balance, updated_at)
-		VALUES ($1, $2::numeric, NOW())
+		INSERT INTO %s (user_id, balance, updated_at, unit)
+		VALUES ($1, $2::numeric, NOW(), 'POINTS')
 		ON CONFLICT (user_id)
 		DO UPDATE SET balance = %s.balance + $2::numeric, updated_at = NOW()
+		WHERE %s.unit='POINTS'
 		RETURNING balance::text
-	`, s.fullTableName(BillingWalletsTable), s.fullTableName(BillingWalletsTable))
+	`, s.fullTableName(BillingWalletsTable), s.fullTableName(BillingWalletsTable), s.fullTableName(BillingWalletsTable))
 	var newBalance string
 	if err = tx.QueryRowContext(ctx, upsertWallet, userID, amountStr).Scan(&newBalance); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = ErrLegacyBalance
+			return TopupOrder{}, err
+		}
 		err = fmt.Errorf("postgres store: credit wallet: %w", err)
 		return TopupOrder{}, err
 	}
@@ -249,8 +288,8 @@ func (s *PostgresStore) ConfirmTopupOrder(ctx context.Context, orderID, adminNot
 	// Append ledger entry. The partial unique index on reference enforces
 	// idempotency at the database layer even if this method is racing.
 	insertTxn := fmt.Sprintf(`
-		INSERT INTO %s (user_id, type, amount, balance_after, reference, metadata)
-		VALUES ($1, 'topup', $2::numeric, $3::numeric, $4, '{}'::jsonb)
+		INSERT INTO %s (user_id, type, amount, balance_after, reference, metadata, unit)
+		VALUES ($1, 'topup', $2::numeric, $3::numeric, $4, '{}'::jsonb, 'POINTS')
 	`, s.fullTableName(BillingTransactionsTable))
 	if _, err = tx.ExecContext(ctx, insertTxn, userID, amountStr, newBalance, orderID); err != nil {
 		if isUniqueViolation(err) {
@@ -268,12 +307,12 @@ func (s *PostgresStore) ConfirmTopupOrder(ctx context.Context, orderID, adminNot
 		    notes = CASE WHEN $2 = '' THEN notes ELSE $2 END
 		WHERE id = $1
 		RETURNING id, user_id, method, amount::text, currency, network, wallet_address,
-		          tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at
+		          tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at, COALESCE(points_amount::text,''), COALESCE(exchange_rate::text,'')
 	`, s.fullTableName(BillingTopupOrdersTable))
 	var o TopupOrder
 	if err = tx.QueryRowContext(ctx, updateOrder, orderID, strings.TrimSpace(adminNote)).Scan(
 		&o.ID, &o.UserID, &o.Method, &o.Amount, &o.Currency, &o.Network, &o.WalletAddress,
-		&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt,
+		&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt, &o.PointsAmount, &o.ExchangeRate,
 	); err != nil {
 		err = fmt.Errorf("postgres store: update topup order: %w", err)
 		return TopupOrder{}, err
@@ -297,7 +336,7 @@ func (s *PostgresStore) ListSubmittedTopupOrders(ctx context.Context, method, ne
 	}
 	query := fmt.Sprintf(`
 		SELECT id, user_id, method, amount::text, currency, network, wallet_address,
-		       tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at
+		       tx_hash, status, notes, created_at, submitted_at, confirmed_at, expires_at, COALESCE(points_amount::text,''), COALESCE(exchange_rate::text,'')
 		FROM %s
 		WHERE status = 'submitted' AND method = $1 AND network = $2 AND tx_hash <> ''
 		ORDER BY submitted_at ASC NULLS LAST, created_at ASC
@@ -314,7 +353,7 @@ func (s *PostgresStore) ListSubmittedTopupOrders(ctx context.Context, method, ne
 		var o TopupOrder
 		if err := rows.Scan(
 			&o.ID, &o.UserID, &o.Method, &o.Amount, &o.Currency, &o.Network, &o.WalletAddress,
-			&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt,
+			&o.TxHash, &o.Status, &o.Notes, &o.CreatedAt, &o.SubmittedAt, &o.ConfirmedAt, &o.ExpiresAt, &o.PointsAmount, &o.ExchangeRate,
 		); err != nil {
 			return nil, fmt.Errorf("postgres store: scan submitted topup: %w", err)
 		}

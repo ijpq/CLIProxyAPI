@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/access/db_access"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/modules/portal"
@@ -22,6 +25,7 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 // billingEnabled reports whether the operator opted into the paid-tier
@@ -38,16 +42,15 @@ func billingEnabled() bool {
 // exactly as before (billing only creates its own tables). This is the
 // recommended setup. When BILLING_DATABASE_URL is unset, billing falls back to
 // the shared PGSTORE_DSN store if present (legacy behavior, where Postgres also
-// takes over auth/config storage). Returns nil (and logs why) when no billing
-// database is configured.
-func resolveBillingStore(ctx context.Context, sharedPG *store.PostgresStore) *store.PostgresStore {
+// takes over auth/config storage). An enabled but unavailable billing database
+// is a startup error rather than a request to disable billing.
+func resolveBillingStore(ctx context.Context, sharedPG *store.PostgresStore) (*store.PostgresStore, error) {
 	dsn := strings.TrimSpace(os.Getenv("BILLING_DATABASE_URL"))
 	if dsn == "" {
 		if sharedPG != nil {
-			return sharedPG
+			return sharedPG, nil
 		}
-		log.Error("BILLING_ENABLED set but no billing database configured; set BILLING_DATABASE_URL (recommended: keeps auth/config file-based) or PGSTORE_DSN; billing disabled")
-		return nil
+		return nil, errors.New("billing: set BILLING_DATABASE_URL or PGSTORE_DSN when BILLING_ENABLED is true")
 	}
 	// Dedicated billing DB: a bare connection + an unused spool dir. We never
 	// call Bootstrap/RegisterTokenStore/EnsureSchema on it, so it only ever
@@ -57,11 +60,11 @@ func resolveBillingStore(ctx context.Context, sharedPG *store.PostgresStore) *st
 		SpoolDir: filepath.Join(os.TempDir(), "cliproxy-billing-store"),
 	})
 	if err != nil {
-		log.Errorf("failed to connect billing database (BILLING_DATABASE_URL): %v; billing disabled", err)
-		return nil
+		// Driver parse errors can contain the original DSN, including passwords.
+		return nil, errors.New("billing: cannot connect to BILLING_DATABASE_URL; check the database configuration and availability")
 	}
 	log.Info("billing using dedicated database (BILLING_DATABASE_URL); auth/config storage unchanged")
-	return pg
+	return pg, nil
 }
 
 func billingModelCatalog(entries []map[string]any) []string {
@@ -94,47 +97,73 @@ func billingModelCatalog(entries []map[string]any) []string {
 }
 
 // setupBilling wires the database-backed access provider and the portal module
-// when billing is enabled and a billing database is available. It returns the
-// additional api.ServerOption values that mount the portal routes; an empty
-// slice means billing is disabled or unconfigured. The passed store is the
+// when billing is enabled. It returns the additional api.ServerOption values
+// that mount the portal routes, or an error that must prevent server startup.
+// An empty slice without an error means billing was disabled. The passed store is the
 // optional shared PGSTORE_DSN store used only as a legacy fallback.
-func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.ServerOption {
+func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) ([]api.ServerOption, error) {
 	if !billingEnabled() {
-		return nil
+		return nil, nil
 	}
-	pg := resolveBillingStore(ctx, sharedPG)
-	if pg == nil {
-		return nil
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("BILLING_USDT_AUTO_CONFIRM")), "true") {
+		return nil, errors.New("billing: shared-address USDT auto-confirm cannot verify payment ownership; disable it and reconcile payments manually")
 	}
 	secret := strings.TrimSpace(os.Getenv("BILLING_JWT_SECRET"))
 	if secret == "" {
-		log.Error("BILLING_ENABLED set but BILLING_JWT_SECRET is empty; billing disabled")
-		return nil
+		return nil, errors.New("billing: BILLING_JWT_SECRET is required when BILLING_ENABLED is true")
 	}
+	adminID := strings.TrimSpace(os.Getenv("BILLING_ADMIN_USER_ID"))
+	if adminID == "" && strings.TrimSpace(os.Getenv("BILLING_ADMIN_EMAIL")) != "" {
+		return nil, errors.New("billing: email-only administrator bootstrap is unsafe; verify the account and configure BILLING_ADMIN_USER_ID")
+	}
+	if adminID != "" {
+		if _, err := uuid.Parse(adminID); err != nil {
+			return nil, errors.New("billing: BILLING_ADMIN_USER_ID must be an explicitly approved UUID")
+		}
+	}
+	// Validate pricing before touching the database or registering global hooks.
+	pricingPath := strings.TrimSpace(os.Getenv("BILLING_PRICING_FILE"))
+	if pricingPath != "" {
+		return nil, errors.New("billing: pricing initialization: monetary pricing files must be reconciled; configure points prices in Portal administration")
+	}
+	pg, err := resolveBillingStore(ctx, sharedPG)
+	if err != nil {
+		return nil, err
+	}
+	initialized := false
+	defer func() {
+		if !initialized && pg != sharedPG {
+			if errClose := pg.Close(); errClose != nil {
+				log.Error("billing: close database after initialization failure")
+			}
+		}
+	}()
 
 	schemaCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	if err := pg.EnsureBillingSchema(schemaCtx); err != nil {
 		cancel()
-		log.Errorf("failed to ensure billing schema: %v", err)
-		return nil
+		return nil, fmt.Errorf("billing: ensure schema: %w", err)
 	}
 	cancel()
+	journal, err := billing.NewDurableMeterSink(pg, strings.TrimSpace(os.Getenv("BILLING_EVENT_DIR")))
+	if err != nil {
+		return nil, errors.New("billing: durable accounting initialization failed; configure a writable persistent BILLING_EVENT_DIR")
+	}
+	if err = journal.Replay(ctx); err != nil {
+		return nil, errors.New("billing: pending accounting events require recovery before startup")
+	}
+	if adminID != "" {
+		if err = pg.PromoteUserIDToAdmin(ctx, adminID); err != nil {
+			return nil, errors.New("billing: the approved administrator account is unavailable; verify BILLING_ADMIN_USER_ID")
+		}
+	}
 
 	// Register the DB-backed API key provider so inbound proxy requests can
 	// authenticate against the billing api_keys table.
 	dbaccess.RegisterWithRevalidation("", pg.LookupAPIKey, pg.LookupAPIKeyByID, pg.TouchAPIKeyLastUsed)
 
 	// Register the metering plugin so token usage is priced and debited.
-	pricingPath := strings.TrimSpace(os.Getenv("BILLING_PRICING_FILE"))
-	markup, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_MARKUP")), 64)
-	pricing, err := billing.LoadPricingFromFile(pricingPath, markup)
-	if err != nil {
-		log.Errorf("billing pricing load failed: %v", err)
-	} else if pricingPath != "" {
-		log.Infof("billing pricing loaded from %s (markup=%.2fx)", pricingPath, markup)
-	} else {
-		log.Warn("BILLING_PRICING_FILE not set; usage will be recorded with zero cost")
-	}
+	log.Info("billing: using versioned Portal points pricing; unpriced paid models are disabled")
 	balanceThreshold, _ := strconv.ParseFloat(strings.TrimSpace(os.Getenv("BILLING_BALANCE_THRESHOLD")), 64)
 	balanceCacheTTL := parseDurationDefault(os.Getenv("BILLING_BALANCE_CACHE_TTL"), 10*time.Second)
 	balanceGuard := billing.NewBalanceGuard(pg, balanceThreshold, balanceCacheTTL)
@@ -145,7 +174,9 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.Serv
 	rateLimiter := billing.NewRateLimiter(rate, burst, bypassRateLimit)
 
 	api.RegisterPostAuthHandler(rateLimiter.Handler())
+	api.RegisterPostAuthHandler(journal.Guard())
 	api.RegisterPostAuthHandler(balanceGuard.Handler())
+	api.RegisterPostAuthHandler(billing.PointPriceGuard(pg))
 	// Per-user account restriction (set by the super admin): narrow candidate
 	// selection to the allowed set so CPA's own scheduler (round-robin /
 	// fill-first) load-balances within it. A single allowed account behaves
@@ -156,7 +187,7 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.Serv
 		if allowed := billing.AllowedAuthIDsFromContext(reqCtx); len(allowed) > 0 {
 			executionCtx = sdkhandlers.WithAllowedAuthIDs(executionCtx, allowed)
 		}
-		if allowed := billing.AllowedModelsFromContext(reqCtx); len(allowed) > 0 {
+		if allowed := billing.AllowedModelsFromContext(reqCtx); allowed != nil {
 			executionCtx = sdkhandlers.WithAllowedModels(executionCtx, allowed)
 		}
 		if executionCtx != reqCtx {
@@ -174,22 +205,11 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.Serv
 		return billingModelCatalog(registry.GetGlobalRegistry().GetAvailableModels("openai"))
 	})
 
-	meter := billing.NewMeterPlugin(pg, pricing)
+	meter := billing.NewMeterPlugin(journal, nil)
 	meter.SetInvalidator(balanceGuard.Invalidate)
+	journal.SetReplayHook(balanceGuard.Invalidate)
 	usage.RegisterPlugin(meter)
-
-	if adminEmail := strings.TrimSpace(os.Getenv("BILLING_ADMIN_EMAIL")); adminEmail != "" {
-		promoteCtx, cancelPromote := context.WithTimeout(ctx, 10*time.Second)
-		switch err := pg.PromoteUserToAdmin(promoteCtx, adminEmail); {
-		case err == nil:
-			log.Infof("billing: promoted %s to admin", adminEmail)
-		case errors.Is(err, store.ErrUserNotFound):
-			log.Warnf("billing: admin email %s not yet registered; promotion will retry on next restart", adminEmail)
-		default:
-			log.Errorf("billing: promote admin %s failed: %v", adminEmail, err)
-		}
-		cancelPromote()
-	}
+	go replayBillingEvents(ctx, journal)
 
 	tokens := billing.NewTokenIssuer(secret, 24*time.Hour)
 	topupCfg := billing.LoadTopupConfigFromEnv()
@@ -220,6 +240,25 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.Serv
 	go expireOrdersLoop(pg)
 
 	configurator := func(engine *gin.Engine, baseHandler *sdkhandlers.BaseAPIHandler, _ *config.Config) {
+		if baseHandler != nil && baseHandler.AuthManager != nil {
+			module.SetHelper(func(ctx context.Context, model string, messages []portal.ChatMessage, maxOutput int) (string, error) {
+				payload, err := json.Marshal(map[string]any{"model": model, "messages": messages, "max_tokens": maxOutput, "stream": false, "n": 1})
+				if err != nil {
+					return "", err
+				}
+				ctx = billing.WithUnbilled(ctx)
+				ctx = sdkhandlers.WithAllowedModels(ctx, []string{model})
+				body, _, failure := baseHandler.ExecuteWithAuthManager(ctx, "openai", model, payload, "")
+				if failure != nil {
+					return "", errors.New("assistant provider failed")
+				}
+				reply := gjson.GetBytes(body, "choices.0.message.content")
+				if reply.Type != gjson.String || strings.TrimSpace(reply.String()) == "" {
+					return "", errors.New("assistant returned no text")
+				}
+				return reply.String(), nil
+			})
+		}
 		// Wire the upstream-account lister from the core auth manager so the
 		// portal can list accounts for binding and the meter can resolve labels.
 		if baseHandler != nil && baseHandler.AuthManager != nil {
@@ -277,7 +316,26 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) []api.Serv
 		module.RegisterRoutes(group)
 		log.Info("billing portal routes mounted at /portal")
 	}
-	return []api.ServerOption{api.WithRouterConfigurator(configurator)}
+	initialized = true
+	return []api.ServerOption{api.WithRouterConfigurator(configurator)}, nil
+}
+
+func replayBillingEvents(ctx context.Context, journal *billing.DurableMeterSink) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			replayCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			err := journal.Replay(replayCtx)
+			cancel()
+			if err != nil {
+				log.Error("billing: pending accounting recovery failed; paid requests remain paused")
+			}
+		}
+	}
 }
 
 // metadataAccessToken extracts the live bearer access token from a credential's

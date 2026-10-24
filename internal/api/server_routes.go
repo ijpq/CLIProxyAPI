@@ -705,7 +705,7 @@ func (s *Server) handleGrokModels(c *gin.Context) {
 }
 
 func filterAllowedGrokModels(ctx context.Context, models []grokbuild.ModelInfo) []grokbuild.ModelInfo {
-	if len(billing.AllowedModelsFromContext(ctx)) == 0 {
+	if billing.AllowedModelsFromContext(ctx) == nil {
 		return models
 	}
 	filtered := make([]grokbuild.ModelInfo, 0, len(models))
@@ -919,7 +919,7 @@ func (s *Server) geminiGetHandler(geminiHandler *gemini.GeminiAPIHandler) gin.Ha
 }
 
 func filterAllowedHomeModelEntries(ctx context.Context, entries []homeModelEntry) []homeModelEntry {
-	if len(billing.AllowedModelsFromContext(ctx)) == 0 {
+	if billing.AllowedModelsFromContext(ctx) == nil {
 		return entries
 	}
 	filtered := make([]homeModelEntry, 0, len(entries))

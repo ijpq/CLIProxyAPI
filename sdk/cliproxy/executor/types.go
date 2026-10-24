@@ -44,6 +44,8 @@ const (
 	// HTTP, streaming, and WebSocket requests share the same enforcement path.
 	// Empty or absent means no restriction.
 	AllowedModelsMetadataKey = "allowed_models"
+	// ModelsRestrictedMetadataKey makes an empty model set deny all execution.
+	ModelsRestrictedMetadataKey = "models_restricted"
 	// SelectedAuthMetadataKey stores the auth ID selected by the scheduler.
 	SelectedAuthMetadataKey = "selected_auth_id"
 	// SelectedAuthCallbackMetadataKey carries an optional callback invoked with the selected auth ID.

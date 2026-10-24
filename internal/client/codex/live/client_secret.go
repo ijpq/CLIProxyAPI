@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -102,7 +103,7 @@ func (s *clientSecretStore) create(session json.RawMessage, lifetime time.Durati
 	authorization.RequestedModel = strings.TrimSpace(authorization.RequestedModel)
 	authorization.Session = append(json.RawMessage(nil), session...)
 	authorization.AllowedAuthIDs = append([]string(nil), authorization.AllowedAuthIDs...)
-	authorization.AllowedModels = append([]string(nil), authorization.AllowedModels...)
+	authorization.AllowedModels = slices.Clone(authorization.AllowedModels)
 	now := s.currentTime()
 	expiresAt := now.Add(lifetime)
 	s.mu.Lock()
@@ -148,7 +149,7 @@ func (s *clientSecretStore) authenticate(token string) (ClientSecretAuthorizatio
 func cloneClientSecretAuthorization(authorization ClientSecretAuthorization) ClientSecretAuthorization {
 	authorization.Session = append(json.RawMessage(nil), authorization.Session...)
 	authorization.AllowedAuthIDs = append([]string(nil), authorization.AllowedAuthIDs...)
-	authorization.AllowedModels = append([]string(nil), authorization.AllowedModels...)
+	authorization.AllowedModels = slices.Clone(authorization.AllowedModels)
 	if authorization.IssuerMetadata != nil {
 		metadata := make(map[string]string, len(authorization.IssuerMetadata))
 		for key, value := range authorization.IssuerMetadata {
@@ -311,7 +312,7 @@ func (h *Handler) createClientSecret(c *gin.Context, session json.RawMessage, ex
 		IssuerUnbilled:  billing.UnbilledFromContext(requestCtx),
 		IssuerMetadata:  issuerMetadataValue,
 		AllowedAuthIDs:  append([]string(nil), billing.AllowedAuthIDsFromContext(requestCtx)...),
-		AllowedModels:   append([]string(nil), billing.AllowedModelsFromContext(requestCtx)...),
+		AllowedModels:   slices.Clone(billing.AllowedModelsFromContext(requestCtx)),
 		RequestedModel:  requestedModel,
 	})
 	if errCreate != nil {

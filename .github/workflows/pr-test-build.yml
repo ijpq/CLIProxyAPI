@@ -23,3 +23,53 @@ jobs:
         run: |
           go build -o test-output ./cmd/server
           rm -f test-output
+
+  billing-portal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: billing_test
+          POSTGRES_USER: cpaaudit
+          POSTGRES_PASSWORD: portal-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cpaaudit -d billing_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      GIN_MODE: release
+      BILLING_TEST_DATABASE_URL: postgres://cpaaudit:portal-test-only@127.0.0.1:5432/billing_test?sslmode=disable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Test Portal UI behavior
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include='**/static/*.js'
+          --test-coverage-lines=95 --test-coverage-branches=95 --test-coverage-functions=95
+          internal/api/modules/portal/portal_ui_test.mjs
+      - name: Test Portal with PostgreSQL and race detection
+        run: >-
+          go test -race -count=1 -covermode=atomic -coverprofile=portal.cover
+          ./internal/api/modules/portal
+      - name: Require 95 percent Portal Go statement coverage
+        run: node .github/scripts/check-portal-coverage.mjs portal.cover 95
+      - name: Test billing with PostgreSQL and race detection
+        run: >-
+          go test -race -count=1
+          ./cmd/server ./internal/billing ./internal/billingvalue
+          ./internal/access/db_access ./internal/store
