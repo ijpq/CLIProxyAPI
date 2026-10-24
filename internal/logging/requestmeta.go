@@ -61,13 +61,18 @@ func WithClientRequestMetadata(ctx context.Context, metadata ClientRequestMetada
 
 // GetClientRequestMetadata returns downstream request metadata stored in ctx.
 func GetClientRequestMetadata(ctx context.Context) ClientRequestMetadata {
+	metadata, _ := LookupClientRequestMetadata(ctx)
+	return metadata
+}
+
+// LookupClientRequestMetadata distinguishes an empty snapshot from a missing one.
+// Async consumers must not fall back to a recycled HTTP context for an empty snapshot.
+func LookupClientRequestMetadata(ctx context.Context) (ClientRequestMetadata, bool) {
 	if ctx == nil {
-		return ClientRequestMetadata{}
+		return ClientRequestMetadata{}, false
 	}
-	if metadata, ok := ctx.Value(clientRequestMetadataKey{}).(ClientRequestMetadata); ok {
-		return metadata
-	}
-	return ClientRequestMetadata{}
+	metadata, ok := ctx.Value(clientRequestMetadataKey{}).(ClientRequestMetadata)
+	return metadata, ok
 }
 
 func WithResponseStatusHolder(ctx context.Context) context.Context {

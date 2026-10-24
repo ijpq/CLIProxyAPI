@@ -206,3 +206,43 @@ func TestRealtimeClientSecretRestoresBillingContextAndRunsPostAuth(t *testing.T)
 		t.Fatalf("revoked response status = %d, want %d; body=%s", revokedResponse.Code, http.StatusUnauthorized, revokedResponse.Body.String())
 	}
 }
+
+type noModelsAccessProvider struct{ billingContextAccessProvider }
+
+func (p noModelsAccessProvider) Authenticate(ctx context.Context, request *http.Request) (*sdkaccess.Result, *sdkaccess.AuthError) {
+	result, err := p.billingContextAccessProvider.Authenticate(ctx, request)
+	result.Metadata[billing.MetadataKeyAllowedModels] = ""
+	result.Metadata[billing.MetadataKeyModelsRestricted] = "1"
+	return result, err
+}
+
+func (p noModelsAccessProvider) Revalidate(ctx context.Context, previous *sdkaccess.Result) (*sdkaccess.Result, *sdkaccess.AuthError) {
+	return p.Authenticate(ctx, nil)
+}
+
+func TestAuthenticationPreservesEmptyModelPolicy(t *testing.T) {
+	manager := sdkaccess.NewManager()
+	manager.SetProviders([]sdkaccess.Provider{noModelsAccessProvider{}})
+	router := gin.New()
+	router.Use(AuthMiddleware(manager))
+	checked := false
+	router.GET("/models", func(c *gin.Context) {
+		checked = true
+		if billing.AllowedModelsFromContext(c.Request.Context()) == nil || billing.ModelAllowed(c.Request.Context(), "model-1") {
+			t.Error("explicit denial was lost during authentication")
+		}
+		c.Status(http.StatusNoContent)
+	})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest("GET", "/models", nil))
+	if !checked || w.Code != http.StatusNoContent {
+		t.Fatalf("request did not reach policy check: %d", w.Code)
+	}
+	authorization, err := revalidateRealtimeClientSecret(context.Background(), manager, codexlive.ClientSecretAuthorization{IssuerProvider: "billing-context-test", IssuerPrincipal: "user-1", IssuerAPIKeyID: "key-1", AllowedModels: []string{"model-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorization.AllowedModels == nil || len(authorization.AllowedModels) != 0 {
+		t.Fatal("delegated credential restored access to models")
+	}
+}

@@ -34,13 +34,15 @@ type User struct {
 
 // APIKeyRecord describes an api_keys row for portal listings (no plaintext).
 type APIKeyRecord struct {
-	ID         string
-	UserID     string
-	KeyPrefix  string
-	Name       string
-	LastUsedAt sql.NullTime
-	RevokedAt  sql.NullTime
-	CreatedAt  time.Time
+	ModelScope    string
+	AllowedModels []string
+	ID            string
+	UserID        string
+	KeyPrefix     string
+	Name          string
+	LastUsedAt    sql.NullTime
+	RevokedAt     sql.NullTime
+	CreatedAt     time.Time
 }
 
 // UsageRecord mirrors a row in the usage_records table for portal listings.
@@ -55,6 +57,8 @@ type UsageRecord struct {
 	CacheReadTokens  int64
 	CacheWriteTokens int64
 	Cost             string
+	PriceVersion     int64
+	Unit             string
 	Status           string
 	ErrorMessage     string
 	AuthID           string
@@ -131,7 +135,7 @@ func (s *PostgresStore) CreateUser(ctx context.Context, email, passwordHash, dis
 	}
 
 	insertWallet := fmt.Sprintf(
-		"INSERT INTO %s (user_id, balance) VALUES ($1, 0)",
+		"INSERT INTO %s (user_id, balance, unit) VALUES ($1, 0, 'POINTS')",
 		s.fullTableName(BillingWalletsTable),
 	)
 	if _, err = tx.ExecContext(ctx, insertWallet, u.ID); err != nil {
@@ -185,97 +189,18 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, id string) (User, error
 	return u, nil
 }
 
-// CreateAPIKey persists a new api_key row owned by userID. The hash and prefix
-// are computed by the caller so the plaintext key is never seen here. Per-user
-// access controls live on the users table, so keys carry no per-key policy.
-func (s *PostgresStore) CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix, name string) (APIKeyRecord, error) {
-	if s == nil || s.db == nil {
-		return APIKeyRecord{}, fmt.Errorf("postgres store: not initialized")
-	}
-	if strings.TrimSpace(userID) == "" || strings.TrimSpace(keyHash) == "" {
-		return APIKeyRecord{}, fmt.Errorf("postgres store: user id and key hash required")
-	}
-	query := fmt.Sprintf(`
-		INSERT INTO %s (user_id, key_hash, key_prefix, name)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, user_id, key_prefix, name, last_used_at, revoked_at, created_at
-	`, s.fullTableName(BillingAPIKeysTable))
-	var rec APIKeyRecord
-	err := s.db.QueryRowContext(ctx, query, userID, keyHash, keyPrefix, strings.TrimSpace(name)).Scan(
-		&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt,
-	)
-	if err != nil {
-		return APIKeyRecord{}, fmt.Errorf("postgres store: insert api key: %w", err)
-	}
-	return rec, nil
-}
-
-// ListAPIKeys returns all keys owned by userID, newest first. Revoked keys are
-// included so the user can audit them.
-func (s *PostgresStore) ListAPIKeys(ctx context.Context, userID string) ([]APIKeyRecord, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("postgres store: not initialized")
-	}
-	query := fmt.Sprintf(`
-		SELECT id, user_id, key_prefix, name, last_used_at, revoked_at, created_at
-		FROM %s WHERE user_id = $1
-		ORDER BY created_at DESC
-	`, s.fullTableName(BillingAPIKeysTable))
-	rows, err := s.db.QueryContext(ctx, query, userID)
-	if err != nil {
-		return nil, fmt.Errorf("postgres store: list api keys: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	out := make([]APIKeyRecord, 0, 8)
-	for rows.Next() {
-		var rec APIKeyRecord
-		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.KeyPrefix, &rec.Name, &rec.LastUsedAt, &rec.RevokedAt, &rec.CreatedAt); err != nil {
-			return nil, fmt.Errorf("postgres store: scan api key: %w", err)
-		}
-		out = append(out, rec)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("postgres store: iterate api keys: %w", err)
-	}
-	return out, nil
-}
-
-// RevokeAPIKey marks a key as revoked. Returns ErrAPIKeyNotFound when the key
-// does not belong to userID or does not exist.
-func (s *PostgresStore) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("postgres store: not initialized")
-	}
-	query := fmt.Sprintf(`
-		UPDATE %s SET revoked_at = NOW()
-		WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
-	`, s.fullTableName(BillingAPIKeysTable))
-	res, err := s.db.ExecContext(ctx, query, keyID, userID)
-	if err != nil {
-		return fmt.Errorf("postgres store: revoke api key: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("postgres store: revoke api key rows: %w", err)
-	}
-	if n == 0 {
-		return ErrAPIKeyNotFound
-	}
-	return nil
-}
-
 // GetWalletBalance returns the current balance for the user as a string
 // (preserving NUMERIC precision). Missing wallets return "0".
 func (s *PostgresStore) GetWalletBalance(ctx context.Context, userID string) (string, error) {
 	if s == nil || s.db == nil {
 		return "", fmt.Errorf("postgres store: not initialized")
 	}
-	query := fmt.Sprintf("SELECT balance::text FROM %s WHERE user_id = $1", s.fullTableName(BillingWalletsTable))
+	query := fmt.Sprintf("SELECT balance::text FROM %s WHERE user_id = $1 AND unit='POINTS'", s.fullTableName(BillingWalletsTable))
 	var balance string
 	err := s.db.QueryRowContext(ctx, query, userID).Scan(&balance)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "0", nil
+		return "", ErrLegacyBalance
 	case err != nil:
 		return "", fmt.Errorf("postgres store: get wallet: %w", err)
 	}
@@ -329,7 +254,7 @@ func (s *PostgresStore) ListUsage(ctx context.Context, userID string, before tim
 	query := fmt.Sprintf(`
 		SELECT id, api_key_id, request_id, provider, model,
 		       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-		       cost::text, status, error_message, auth_id, auth_label, created_at
+		       cost::text, status, error_message, auth_id, auth_label, created_at, price_version, unit
 		FROM %s
 		WHERE %s
 		ORDER BY created_at DESC
@@ -347,7 +272,7 @@ func (s *PostgresStore) ListUsage(ctx context.Context, userID string, before tim
 		if err := rows.Scan(
 			&rec.ID, &rec.APIKeyID, &rec.RequestID, &rec.Provider, &rec.Model,
 			&rec.InputTokens, &rec.OutputTokens, &rec.CacheReadTokens, &rec.CacheWriteTokens,
-			&rec.Cost, &rec.Status, &rec.ErrorMessage, &rec.AuthID, &rec.AuthLabel, &rec.CreatedAt,
+			&rec.Cost, &rec.Status, &rec.ErrorMessage, &rec.AuthID, &rec.AuthLabel, &rec.CreatedAt, &rec.PriceVersion, &rec.Unit,
 		); err != nil {
 			return nil, fmt.Errorf("postgres store: scan usage: %w", err)
 		}
@@ -397,7 +322,7 @@ func (s *PostgresStore) ListAllUsage(ctx context.Context, before time.Time, limi
 		SELECT ur.id, ur.api_key_id, ur.request_id, ur.provider, ur.model,
 		       ur.input_tokens, ur.output_tokens, ur.cache_read_tokens, ur.cache_write_tokens,
 		       ur.cost::text, ur.status, ur.error_message, ur.auth_id, ur.auth_label, ur.created_at,
-		       COALESCE(u.email, '')
+		       COALESCE(u.email, ''), ur.price_version, ur.unit
 		FROM %s ur
 		LEFT JOIN %s u ON u.id = ur.user_id%s
 		ORDER BY ur.created_at DESC
@@ -416,7 +341,7 @@ func (s *PostgresStore) ListAllUsage(ctx context.Context, before time.Time, limi
 			&rec.ID, &rec.APIKeyID, &rec.RequestID, &rec.Provider, &rec.Model,
 			&rec.InputTokens, &rec.OutputTokens, &rec.CacheReadTokens, &rec.CacheWriteTokens,
 			&rec.Cost, &rec.Status, &rec.ErrorMessage, &rec.AuthID, &rec.AuthLabel, &rec.CreatedAt,
-			&rec.UserEmail,
+			&rec.UserEmail, &rec.PriceVersion, &rec.Unit,
 		); err != nil {
 			return nil, fmt.Errorf("postgres store: scan all usage: %w", err)
 		}
@@ -543,6 +468,25 @@ func (s *PostgresStore) PromoteUserToAdmin(ctx context.Context, email string) er
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("postgres store: promote admin rows: %w", err)
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// PromoteUserIDToAdmin requires an operator-selected immutable user ID.
+func (s *PostgresStore) PromoteUserIDToAdmin(ctx context.Context, userID string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("postgres store: not initialized")
+	}
+	result, err := s.db.ExecContext(ctx, fmt.Sprintf(`UPDATE %s SET is_admin=TRUE,updated_at=NOW() WHERE id=$1 AND status='active'`, s.fullTableName(BillingUsersTable)), strings.TrimSpace(userID))
+	if err != nil {
+		return fmt.Errorf("postgres store: promote approved user: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
 	}
 	if n == 0 {
 		return ErrUserNotFound

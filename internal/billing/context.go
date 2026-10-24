@@ -21,8 +21,9 @@ const (
 	// IDs the user is restricted to (empty/absent = all).
 	MetadataKeyAllowedAuthIDs = "billing_allowed_auth_ids"
 	// MetadataKeyAllowedModels carries the comma-separated client-visible model
-	// names the user is restricted to (empty/absent = all).
-	MetadataKeyAllowedModels = "billing_allowed_models"
+	// names the caller is restricted to; ModelsRestricted distinguishes none.
+	MetadataKeyAllowedModels    = "billing_allowed_models"
+	MetadataKeyModelsRestricted = "billing_models_restricted"
 )
 
 type contextKey int
@@ -104,9 +105,9 @@ func AllowedAuthIDsFromContext(ctx context.Context) []string {
 }
 
 // WithAllowedModels attaches the client-visible model names the user is
-// restricted to. An empty slice leaves the context unchanged.
+// restricted to. Nil leaves the context unchanged; non-nil empty denies all.
 func WithAllowedModels(ctx context.Context, models []string) context.Context {
-	if len(models) == 0 {
+	if models == nil {
 		return ctx
 	}
 	return context.WithValue(ctx, ctxAllowedModels, models)
@@ -119,4 +120,13 @@ func AllowedModelsFromContext(ctx context.Context) []string {
 	}
 	v, _ := ctx.Value(ctxAllowedModels).([]string)
 	return v
+}
+
+// ModelsFromMetadata preserves explicit empty model restrictions across authentication.
+func ModelsFromMetadata(meta map[string]string) []string {
+	models := SplitCSV(meta[MetadataKeyAllowedModels])
+	if models == nil && meta[MetadataKeyModelsRestricted] == "1" {
+		return []string{}
+	}
+	return models
 }

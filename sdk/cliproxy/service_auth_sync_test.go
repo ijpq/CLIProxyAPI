@@ -1044,21 +1044,21 @@ func TestHandleAuthUpdates_SameRevisionWaitDoesNotWaitForOtherAuthInBatch(t *tes
 
 	service := &Service{cfg: &config.Config{}, coreManager: manager}
 
-	bStarted := make(chan struct{})
-	bBlock := make(chan struct{})
+	blockedStarted := make(chan struct{})
+	releaseBlocked := make(chan struct{})
 	var started atomic.Int32
 	modelRegistrationTaskHook = func() {
 		if started.Add(1) == 2 {
-			close(bStarted)
-			<-bBlock
+			close(blockedStarted)
+			<-releaseBlocked
 		}
 	}
 	t.Cleanup(func() {
 		modelRegistrationTaskHook = nil
 		select {
-		case <-bBlock:
+		case <-releaseBlocked:
 		default:
-			close(bBlock)
+			close(releaseBlocked)
 		}
 	})
 
@@ -1074,23 +1074,42 @@ func TestHandleAuthUpdates_SameRevisionWaitDoesNotWaitForOtherAuthInBatch(t *tes
 	}()
 
 	select {
-	case <-bStarted:
+	case <-blockedStarted:
 	case <-time.After(2 * time.Second):
 		t.Fatal("second auth registration in batch did not start")
 	}
 
+	// Workers may enter the hook in either order. Select the auth whose
+	// registration actually completed instead of assuming task A ran first.
+	completedUpdate := updateA
+	waitA := service.authRegistrationWaitCh(authAID)
+	waitB := service.authRegistrationWaitCh(authBID)
+	switch {
+	case waitA == nil:
+	case waitB == nil:
+		completedUpdate = updateB
+	default:
+		select {
+		case <-waitA:
+		case <-waitB:
+			completedUpdate = updateB
+		case <-time.After(2 * time.Second):
+			t.Fatal("unblocked auth registration did not finish")
+		}
+	}
+
 	doneA := make(chan struct{})
 	go func() {
-		service.handleAuthUpdate(context.Background(), updateA)
+		service.handleAuthUpdate(context.Background(), completedUpdate)
 		close(doneA)
 	}()
 	select {
 	case <-doneA:
 	case <-time.After(2 * time.Second):
-		t.Fatal("auth A hook wait blocked on unrelated auth B registration")
+		t.Fatal("completed auth hook wait blocked on an unrelated registration")
 	}
 
-	close(bBlock)
+	close(releaseBlocked)
 	select {
 	case <-finishedBatch:
 	case <-time.After(2 * time.Second):
@@ -1700,14 +1719,20 @@ func TestEndToEndAuthFileReplacement_RestoresModelsInV1ModelsWithoutRestart(t *t
 		Code:       "unauthorized",
 		Message:    "Encountered invalidated oauth token: test-token",
 	}
+	currentAuth, ok := service.coreManager.GetByID(authID)
+	if !ok {
+		t.Fatal("registered auth disappeared after model sync")
+	}
 	for _, m := range teamModels {
 		service.coreManager.MarkResult(context.Background(), coreauth.Result{
-			AuthID:     authID,
-			Provider:   "codex",
-			Model:      m,
-			RouteModel: m,
-			Success:    false,
-			Error:      unauthErr,
+			CredentialVersion: currentAuth.CredentialVersion,
+			RegistrationEpoch: currentAuth.RegistrationEpoch,
+			AuthID:            authID,
+			Provider:          "codex",
+			Model:             m,
+			RouteModel:        m,
+			Success:           false,
+			Error:             unauthErr,
 		})
 	}
 
@@ -1850,14 +1875,20 @@ func TestEndToEndAuthFilePatch_RestoresModelsInV1ModelsWithoutRestart(t *testing
 		Message:    "Encountered invalidated oauth token: test-token",
 	}
 	teamModels := []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "codex-auto-review"}
+	currentAuth, ok := service.coreManager.GetByID(authID)
+	if !ok {
+		t.Fatal("registered auth disappeared after model sync")
+	}
 	for _, m := range teamModels {
 		service.coreManager.MarkResult(context.Background(), coreauth.Result{
-			AuthID:     authID,
-			Provider:   "codex",
-			Model:      m,
-			RouteModel: m,
-			Success:    false,
-			Error:      unauthErr,
+			CredentialVersion: currentAuth.CredentialVersion,
+			RegistrationEpoch: currentAuth.RegistrationEpoch,
+			AuthID:            authID,
+			Provider:          "codex",
+			Model:             m,
+			RouteModel:        m,
+			Success:           false,
+			Error:             unauthErr,
 		})
 	}
 

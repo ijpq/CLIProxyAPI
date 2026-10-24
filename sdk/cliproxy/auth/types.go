@@ -21,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	baseauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 )
 
 // PostAuthHook defines a function that is called after an Auth record is created
@@ -1037,6 +1038,12 @@ func IsCodexClientRequest(ctx context.Context, clientHeaders ...http.Header) boo
 		if isCodex, ok := ctx.Value(codexClientRequestContextKey{}).(bool); ok {
 			return isCodex
 		}
+	}
+	if metadata, ok := logging.LookupClientRequestMetadata(ctx); ok {
+		if IsCodexClientUserAgent(metadata.UserAgent) {
+			return true
+		}
+	} else if ctx != nil {
 		if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
 			if IsCodexClientUserAgent(headerValueFromHTTPHeader(ginCtx.Request.Header, "User-Agent")) {
 				return true

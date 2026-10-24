@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 
@@ -59,22 +58,9 @@ func (c *Client) rebalanceCommand(ctx context.Context, address string, args ...a
 	}
 	options.ReadTimeout = -1
 	options.WriteTimeout = -1
-	baseDialer := redis.NewDialer(options)
-	options.Dialer = func(dialCtx context.Context, network, dialAddress string) (net.Conn, error) {
-		conn, errDial := baseDialer(dialCtx, network, dialAddress)
-		if errDial != nil {
-			return nil, errDial
-		}
-		if ctx.Err() != nil {
-			_ = closeUnderlyingTransport(conn)
-			return nil, context.Cause(ctx)
-		}
-		return newPluginSyncCancelableConn(ctx, conn), nil
-	}
+	options.Dialer = cancelableRedisDialer(ctx, redis.NewDialer(options))
 	command := redis.NewClient(options)
-	stopCancel := context.AfterFunc(ctx, func() { _ = command.Close() })
 	defer func() {
-		stopCancel()
 		if errClose := command.Close(); errClose != nil && ctx.Err() == nil {
 			log.Debugf("Home rebalance transport close failed: %v", errClose)
 		}

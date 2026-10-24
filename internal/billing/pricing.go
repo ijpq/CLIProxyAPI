@@ -3,6 +3,7 @@ package billing
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -29,15 +30,15 @@ type PricingTable struct {
 // NewPricingTable constructs an empty table with the supplied markup
 // multiplier (1.0 = pass through). A non-positive markup defaults to 1.0.
 func NewPricingTable(markup float64) *PricingTable {
-	if markup <= 0 {
+	if markup <= 0 || math.IsNaN(markup) || math.IsInf(markup, 0) {
 		markup = 1.0
 	}
 	return &PricingTable{prices: make(map[string]ModelPrice), markup: markup}
 }
 
 // LoadPricingFromFile reads a JSON pricing document from path. The file must
-// decode into map[string]ModelPrice. Missing files return an empty table so
-// operators can start without pricing configured (cost will be zero).
+// decode into map[string]ModelPrice. An omitted path returns an empty table
+// for audit-only deployments; an explicitly configured file must be readable.
 func LoadPricingFromFile(path string, markup float64) (*PricingTable, error) {
 	table := NewPricingTable(markup)
 	if strings.TrimSpace(path) == "" {
@@ -45,9 +46,6 @@ func LoadPricingFromFile(path string, markup float64) (*PricingTable, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return table, nil
-		}
 		return nil, fmt.Errorf("billing: read pricing file: %w", err)
 	}
 	raw := make(map[string]ModelPrice)
@@ -55,7 +53,19 @@ func LoadPricingFromFile(path string, markup float64) (*PricingTable, error) {
 		return nil, fmt.Errorf("billing: parse pricing file: %w", err)
 	}
 	for k, v := range raw {
-		table.prices[normalizeKey(k)] = v
+		key := normalizeKey(k)
+		if key == "" {
+			return nil, fmt.Errorf("billing: empty pricing model")
+		}
+		if _, exists := table.prices[key]; exists {
+			return nil, fmt.Errorf("billing: duplicate normalized pricing model %q", key)
+		}
+		for _, price := range []float64{v.InputPerMillion, v.OutputPerMillion, v.CacheReadPerMillion, v.CacheWritePerMillion} {
+			if price < 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+				return nil, fmt.Errorf("billing: invalid price for model %q", key)
+			}
+		}
+		table.prices[key] = v
 	}
 	return table, nil
 }
@@ -85,6 +95,12 @@ func (t *PricingTable) Cost(provider, model string, inputTokens, outputTokens, c
 	price, ok := t.Lookup(provider, model)
 	if !ok {
 		return 0
+	}
+	if price.CacheReadPerMillion == 0 {
+		price.CacheReadPerMillion = price.InputPerMillion
+	}
+	if price.CacheWritePerMillion == 0 {
+		price.CacheWritePerMillion = price.InputPerMillion
 	}
 	cost := perMillion(price.InputPerMillion, inputTokens) +
 		perMillion(price.OutputPerMillion, outputTokens) +

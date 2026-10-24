@@ -21,7 +21,7 @@ type APIKeyLookup struct {
 	// Per-user access controls (from the users table), applied to every key
 	// the user owns. Set only by the super admin.
 	Unbilled       bool     // exempt from wallet balance check + debit
-	AllowedModels  []string // restrict to these client-visible models (empty = all)
+	AllowedModels  []string // effective model access: nil = all, non-nil empty = none
 	AllowedAuthIDs []string // restrict to these upstream accounts (empty = all)
 }
 
@@ -110,21 +110,32 @@ func (s *PostgresStore) lookupAPIKey(ctx context.Context, column, value string) 
 		}).Warn("postgres store: slow API key lookup")
 	}()
 	query := fmt.Sprintf(
-		`SELECT k.id, k.user_id, u.unbilled, u.allowed_models, u.allowed_auth_ids
+		`SELECT k.id, k.user_id, u.unbilled, u.allowed_models, u.allowed_auth_ids, k.model_scope, k.allowed_models
 		 FROM %s k JOIN %s u ON u.id = k.user_id
-		 WHERE %s = $1 AND k.revoked_at IS NULL`,
+		 WHERE %s = $1 AND k.revoked_at IS NULL AND u.status = 'active'`,
 		s.fullTableName(BillingAPIKeysTable), s.fullTableName(BillingUsersTable), column,
 	)
 	var out APIKeyLookup
-	var modelsRaw, authRaw string
-	err := s.db.QueryRowContext(ctx, query, value).Scan(&out.ID, &out.UserID, &out.Unbilled, &modelsRaw, &authRaw)
+	var modelsRaw, authRaw, scope, keyModelsRaw string
+	err := s.db.QueryRowContext(ctx, query, value).Scan(&out.ID, &out.UserID, &out.Unbilled, &modelsRaw, &authRaw, &scope, &keyModelsRaw)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return APIKeyLookup{}, ErrAPIKeyNotFound
 	case err != nil:
 		return APIKeyLookup{}, fmt.Errorf("postgres store: lookup api key: %w", err)
 	}
-	out.AllowedModels = DecodeAuthIDs(modelsRaw)
+	out.AllowedModels = effectiveKeyModels(DecodeAuthIDs(modelsRaw), APIKeyPolicy{ModelScope: scope, AllowedModels: DecodeAuthIDs(keyModelsRaw)})
+	prices, errPrices := s.ListPointPrices(ctx)
+	if errPrices != nil {
+		return APIKeyLookup{}, fmt.Errorf("postgres store: public model access: %w", errPrices)
+	}
+	publicModels := make([]string, 0, len(prices))
+	for _, price := range prices {
+		if price.Enabled {
+			publicModels = append(publicModels, price.Model)
+		}
+	}
+	out.AllowedModels = intersectModels(out.AllowedModels, publicModels)
 	out.AllowedAuthIDs = DecodeAuthIDs(authRaw)
 	return out, nil
 }

@@ -2,6 +2,8 @@ package billing
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,6 +29,8 @@ type BalanceGuard struct {
 
 	mu    sync.Mutex
 	cache map[string]balanceCacheEntry
+	// Invalidation also fences reads that were already in flight.
+	generation uint64
 }
 
 type balanceCacheEntry struct {
@@ -86,14 +90,17 @@ func (g *BalanceGuard) Invalidate(userID string) {
 		return
 	}
 	g.mu.Lock()
+	g.generation++
 	delete(g.cache, userID)
 	g.mu.Unlock()
 }
 
 func (g *BalanceGuard) balanceFor(ctx context.Context, userID string) (float64, error) {
+	var generation uint64
 	if g.cacheTTL > 0 {
 		g.mu.Lock()
 		entry, ok := g.cache[userID]
+		generation = g.generation
 		g.mu.Unlock()
 		if ok && time.Now().Before(entry.expiresAt) {
 			return entry.balance, nil
@@ -104,13 +111,18 @@ func (g *BalanceGuard) balanceFor(ctx context.Context, userID string) (float64, 
 	if err != nil {
 		return 0, err
 	}
-	bal, _ := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	bal, parseErr := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if parseErr != nil || math.IsNaN(bal) || math.IsInf(bal, 0) {
+		return 0, fmt.Errorf("billing: invalid wallet balance")
+	}
 
 	if g.cacheTTL > 0 {
 		g.mu.Lock()
-		g.cache[userID] = balanceCacheEntry{
-			balance:   bal,
-			expiresAt: time.Now().Add(g.cacheTTL),
+		if generation == g.generation {
+			g.cache[userID] = balanceCacheEntry{
+				balance:   bal,
+				expiresAt: time.Now().Add(g.cacheTTL),
+			}
 		}
 		g.mu.Unlock()
 	}

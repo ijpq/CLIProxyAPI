@@ -102,6 +102,12 @@ func (w *Watcher) reloadConfig() bool {
 		log.Errorf("failed to reload config: %v", errLoadConfig)
 		return false
 	}
+	// A save can truncate the file between the change check and LoadConfig's
+	// read. Never replace active settings with defaults from that empty read.
+	if newConfig == nil || newConfig.SourceHash == config.ComputeSourceHash(nil) {
+		log.Debug("ignoring empty config snapshot during reload")
+		return false
+	}
 
 	resolvedNewAuthDir := ""
 	if w.mirroredAuthDir != "" {

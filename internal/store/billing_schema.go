@@ -55,7 +55,7 @@ func billingSchemaStatements(s *PostgresStore) []string {
 	transactions := s.fullTableName(BillingTransactionsTable)
 	usageRecords := s.fullTableName(BillingUsageRecordsTable)
 
-	return []string{
+	statements := []string{
 		fmt.Sprintf(`
 			CREATE TABLE IF NOT EXISTS %s (
 				id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -148,11 +148,15 @@ func billingSchemaStatements(s *PostgresStore) []string {
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_topup_user_created ON %s(user_id, created_at DESC)`, s.fullTableName(BillingTopupOrdersTable)),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_topup_status ON %s(status)`, s.fullTableName(BillingTopupOrdersTable)),
 		fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_tx_hash ON %s(tx_hash) WHERE tx_hash <> ''`, s.fullTableName(BillingTopupOrdersTable)),
+		// Chain transaction hashes identify the same payment regardless of hex case.
+		// Existing case-variant duplicates must be reconciled before this migration.
+		fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_tx_hash_normalized ON %s(LOWER(BTRIM(tx_hash))) WHERE BTRIM(tx_hash) <> ''`, s.fullTableName(BillingTopupOrdersTable)),
 		// Active orders on the same method must have unique amounts so the
 		// operator can attribute incoming payments to a specific order when
 		// the channel (WeChat / Alipay personal QR) provides no other
 		// reference data.
-		fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_active_method_amount ON %s(method, amount) WHERE status IN ('pending','submitted')`, s.fullTableName(BillingTopupOrdersTable)),
+		fmt.Sprintf(`DROP INDEX IF EXISTS %s`, s.fullTableName("idx_topup_active_method_amount")),
+		fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_active_fiat_amount ON %s(method, amount) WHERE method IN ('wechat','alipay') AND status IN ('pending','submitted')`, s.fullTableName(BillingTopupOrdersTable)),
 
 		// Per-user access controls, set ONLY by the super admin (is_admin). All
 		// three are independent and apply to every API key the user owns:
@@ -165,6 +169,8 @@ func billingSchemaStatements(s *PostgresStore) []string {
 		// actually served each metered request (audit).
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS unbilled BOOLEAN NOT NULL DEFAULT FALSE`, users),
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS allowed_models TEXT NOT NULL DEFAULT ''`, users),
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS model_scope TEXT NOT NULL DEFAULT 'all' CHECK (model_scope IN ('all','selected','none'))`, apiKeys),
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS allowed_models TEXT NOT NULL DEFAULT ''`, apiKeys),
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS allowed_auth_ids TEXT NOT NULL DEFAULT ''`, users),
 		// allow_reset lets the user consume a provider's rate-limit reset credit
 		// (e.g. Codex "reset quota") from the portal. Off by default; granted only
@@ -184,4 +190,5 @@ func billingSchemaStatements(s *PostgresStore) []string {
 			)
 		`, s.fullTableName(BillingAccountAliasesTable)),
 	}
+	return append(statements, commerceSchemaStatements(s)...)
 }

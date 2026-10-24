@@ -142,3 +142,19 @@ func TestProviderRejectsRevokedOrUnknownPortalKey(t *testing.T) {
 		t.Fatalf("Authenticate() error = %#v, want HTTP 401", authErr)
 	}
 }
+
+func TestProviderPreservesExplicitEmptyPolicy(t *testing.T) {
+	p := newProvider("", func(context.Context, string) (store.APIKeyLookup, error) {
+		return store.APIKeyLookup{ID: "key", UserID: "user", AllowedModels: []string{}}, nil
+	}, nil)
+	req, _ := http.NewRequest("GET", "http://example.test/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer synthetic-key")
+	result, err := p.Authenticate(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := billing.ModelsFromMetadata(result.Metadata)
+	if models == nil || len(models) != 0 {
+		t.Fatalf("empty restriction became unrestricted: %#v", models)
+	}
+}

@@ -3,9 +3,12 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/billingvalue"
 )
 
 // ListAllUsers returns all billing users, newest first.
@@ -45,6 +48,11 @@ func (s *PostgresStore) AdminCreditWallet(ctx context.Context, userID, amountStr
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(amountStr) == "" {
 		return "", fmt.Errorf("postgres store: user id and amount required")
 	}
+	normalized, err := billingvalue.NormalizeSigned(amountStr)
+	if err != nil {
+		return "", err
+	}
+	amountStr = normalized
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -59,15 +67,20 @@ func (s *PostgresStore) AdminCreditWallet(ctx context.Context, userID, amountStr
 	}()
 
 	upsert := fmt.Sprintf(`
-		INSERT INTO %s (user_id, balance, updated_at)
-		VALUES ($1, $2::numeric, NOW())
+		INSERT INTO %s (user_id, balance, updated_at, unit)
+		VALUES ($1, $2::numeric, NOW(), 'POINTS')
 		ON CONFLICT (user_id)
 		DO UPDATE SET balance = %s.balance + $2::numeric, updated_at = NOW()
+		WHERE %s.unit='POINTS'
 		RETURNING balance::text
-	`, s.fullTableName(BillingWalletsTable), s.fullTableName(BillingWalletsTable))
+	`, s.fullTableName(BillingWalletsTable), s.fullTableName(BillingWalletsTable), s.fullTableName(BillingWalletsTable))
 
 	var newBalance string
 	if err = tx.QueryRowContext(ctx, upsert, userID, amountStr).Scan(&newBalance); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = ErrLegacyBalance
+			return "", err
+		}
 		err = fmt.Errorf("postgres store: credit wallet: %w", err)
 		return "", err
 	}
@@ -76,12 +89,17 @@ func (s *PostgresStore) AdminCreditWallet(ctx context.Context, userID, amountStr
 		reference = "admin-adjust"
 	}
 	insertTxn := fmt.Sprintf(`
-		INSERT INTO %s (user_id, type, amount, balance_after, reference, metadata)
-		VALUES ($1, 'adjust', $2::numeric, $3::numeric, $4, $5::jsonb)
+		INSERT INTO %s (user_id, type, amount, balance_after, reference, metadata, unit)
+		VALUES ($1, 'adjust', $2::numeric, $3::numeric, $4, $5::jsonb, 'POINTS')
 	`, s.fullTableName(BillingTransactionsTable))
 	meta := "{}"
 	if note != "" {
-		meta = fmt.Sprintf(`{"note":%q}`, note)
+		data, marshalErr := json.Marshal(map[string]string{"note": note})
+		if marshalErr != nil {
+			err = fmt.Errorf("postgres store: encode credit metadata: %w", marshalErr)
+			return "", err
+		}
+		meta = string(data)
 	}
 	if _, err = tx.ExecContext(ctx, insertTxn, userID, amountStr, newBalance, reference, meta); err != nil {
 		err = fmt.Errorf("postgres store: insert adjust txn: %w", err)

@@ -743,7 +743,7 @@ func modelListInterceptorMetadata(c *gin.Context) map[string]any {
 }
 
 func filterAllowedModelListResponse(ctx context.Context, body []byte) ([]byte, error) {
-	if len(billing.AllowedModelsFromContext(ctx)) == 0 {
+	if billing.AllowedModelsFromContext(ctx) == nil {
 		return body, nil
 	}
 	var catalog map[string]json.RawMessage

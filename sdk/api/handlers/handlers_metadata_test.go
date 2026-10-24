@@ -446,3 +446,14 @@ func TestHomeUpdatedAPIKeyOverridesParentWithAPIKeyAfterCapture(t *testing.T) {
 		t.Fatalf("coreusage.APIKeyFromContext = %q, want %q", got, "home-dispatched-key-b")
 	}
 }
+
+func TestEmptyModelPolicySurvivesExecutionMetadata(t *testing.T) {
+	ctx := WithAllowedModels(context.Background(), []string{})
+	if modelAllowedFromContext(ctx, "any-model") {
+		t.Fatal("empty policy allowed execution")
+	}
+	metadata := requestExecutionMetadata(ctx)
+	if metadata[coreexecutor.ModelsRestrictedMetadataKey] != true {
+		t.Fatal("empty restriction lost from execution metadata")
+	}
+}

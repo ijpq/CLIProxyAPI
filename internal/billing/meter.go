@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/store"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
@@ -30,11 +31,13 @@ type MeterPlugin struct {
 	lowBalanceThresh float64
 }
 
-// NewMeterPlugin builds the plugin. Both arguments are required; passing nil
-// for either disables billing for the request.
+// NewMeterPlugin builds the plugin. A nil pricing table uses the request's
+// versioned points price. A nil sink disables event storage.
 func NewMeterPlugin(sink MeterSink, pricing *PricingTable) *MeterPlugin {
 	return &MeterPlugin{sink: sink, pricing: pricing}
 }
+
+func (p *MeterPlugin) SynchronousUsage() bool { return true }
 
 // SetInvalidator registers a callback invoked after each successful debit so
 // downstream caches (e.g. the BalanceGuard) can drop stale entries.
@@ -74,22 +77,36 @@ func (p *MeterPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 	}
 
 	cost := 0.0
+	detail := usage.EnsureTokenBreakdownForProvider(record.Detail, record.Provider, record.ExecutorType)
+	input, output := record.Detail.InputTokens, record.Detail.OutputTokens
+	cacheRead, cacheWrite := record.Detail.CacheReadTokens, record.Detail.CacheCreationTokens
+	if b := detail.TokenBreakdown; b.Valid() && b.Quality == usage.TokenAccountingQualityComplete {
+		input, output = b.Input.UncachedTokens, b.Output.TotalTokens
+		cacheRead, cacheWrite = b.Input.CacheReadTokens, b.Input.CacheWriteTokens
+	}
 	if p.pricing != nil {
 		cost = p.pricing.Cost(
 			record.Provider, record.Model,
-			record.Detail.InputTokens, record.Detail.OutputTokens,
-			record.Detail.CacheReadTokens, record.Detail.CacheCreationTokens,
+			input, output, cacheRead, cacheWrite,
 		)
+	}
+	costString := fmt.Sprintf("%.6f", cost)
+	var priceVersion int64
+	if p.pricing == nil {
+		var err error
+		costString, priceVersion, err = pointsCost(ctx, input, output, cacheRead, cacheWrite)
+		if err != nil {
+			log.WithError(err).Error("billing: calculate points charge failed")
+			return
+		}
+		cost, _ = strconv.ParseFloat(costString, 64)
 	}
 
 	status := "success"
 	errMsg := ""
 	if record.Failed {
 		status = "error"
-		errMsg = record.Fail.Body
-		if len(errMsg) > 512 {
-			errMsg = errMsg[:512]
-		}
+		errMsg = fmt.Sprintf("upstream request failed (status %d)", record.Fail.StatusCode)
 	}
 
 	unbilled := UnbilledFromContext(ctx)
@@ -101,18 +118,28 @@ func (p *MeterPlugin) HandleUsage(ctx context.Context, record usage.Record) {
 
 	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	requestID := strings.TrimSpace(record.RequestID)
+	if requestID == "" {
+		requestID = requestIDFromContext(ctx)
+	}
+	eventID := strings.TrimSpace(record.EventID)
+	if eventID == "" {
+		eventID = uuid.NewString()
+	}
 
 	if err := p.sink.RecordUsageAndDebit(bgCtx, store.MeteredUsage{
+		EventID:          eventID,
 		UserID:           userID,
 		APIKeyID:         APIKeyIDFromContext(ctx),
-		RequestID:        requestIDFromContext(ctx),
+		RequestID:        requestID,
 		Provider:         record.Provider,
 		Model:            record.Model,
 		InputTokens:      record.Detail.InputTokens,
 		OutputTokens:     record.Detail.OutputTokens,
 		CacheReadTokens:  record.Detail.CacheReadTokens,
 		CacheWriteTokens: record.Detail.CacheCreationTokens,
-		Cost:             fmt.Sprintf("%.6f", cost),
+		Cost:             costString,
+		PriceVersion:     priceVersion,
 		Status:           status,
 		ErrorMessage:     errMsg,
 		AuthID:           authID,

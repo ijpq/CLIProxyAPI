@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>API Console</title>
+<title>TrueCore AI · 控制台</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --bg:#0b0e14; --bg-2:#0d1117; --surface:#12161f; --surface-2:#161b26;
-  --border:#232a38; --border-2:#2c3547;
-  --text:#e6edf3; --muted:#8b94a7; --faint:#5b6472;
-  --accent:#6366f1; --accent-2:#818cf8; --accent-soft:rgba(99,102,241,.15);
+  --bg:#f5f7f9; --bg-2:#f8fafb; --surface:#ffffff; --surface-2:#f0f4f5;
+  --border:#e5eaf0; --border-2:#d6dee6;
+  --text:#182c3b; --muted:#586b7c; --faint:#718293;
+  --accent:#0f766e; --accent-2:#0b6b63; --accent-soft:#e6f3f0;
   --success:#22c55e; --danger:#f43f5e; --warn:#f59e0b; --info:#38bdf8;
   --radius:12px; --radius-sm:9px;
-  --shadow:0 8px 30px rgba(0,0,0,.35);
+  --shadow:0 8px 30px rgba(24,44,59,.05);
 }
 html,body{height:100%}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased}
@@ -197,6 +197,14 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
 .picker-item input{width:auto;accent-color:var(--accent)}
 .hint{font-size:.78rem;color:var(--faint);margin-top:.4rem}
 
+.landing{max-width:1120px;margin:auto;padding:1.5rem}
+.landing-nav{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;justify-content:space-between}
+.landing-nav .links,.hero-actions{display:flex;gap:.8rem;flex-wrap:wrap;align-items:center}
+.hero{padding:5rem 0 3rem;max-width:780px}.hero h1{font-size:clamp(2rem,5vw,3.6rem);line-height:1.2;margin:1rem 0}.hero p{color:var(--muted);font-size:1.05rem;line-height:1.8;margin-bottom:1.5rem}
+.landing-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin:1.5rem 0 3rem}.landing-grid h3{margin-bottom:.6rem}.landing-grid p{color:var(--muted);line-height:1.8}
+.landing section{scroll-margin-top:2rem}.landing h2{margin:1rem 0}.landing footer{padding:2rem 0;color:var(--muted);font-size:.85rem}
+.chat-line{white-space:pre-wrap;overflow-wrap:anywhere;padding:1rem;margin:.6rem 0;border:1px solid var(--border);border-radius:var(--radius-sm);line-height:1.8}.chat-line.user{background:var(--surface-2)}.chat-line.assistant{background:var(--bg-2)}
+.settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}
 @media(max-width:820px){
   .sidebar{width:100%;position:fixed;bottom:0;top:auto;height:auto;flex-direction:row;padding:.4rem;z-index:20;border-right:none;border-top:1px solid var(--border)}
   .brand,.side-foot{display:none}
@@ -204,15 +212,49 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
   .sidebar nav a{flex-direction:column;gap:2px;font-size:.68rem;padding:.4rem}
   .main{padding:1.1rem;padding-bottom:5rem;max-width:100%}
 }
+
+/* TrueCore customer workspace. */
+body::before{display:none}
+button,a,input,select,textarea{touch-action:manipulation}
+button:focus-visible,a:focus-visible,textarea:focus-visible{outline:3px solid #59a89f;outline-offset:3px}
+button:disabled{cursor:not-allowed;opacity:.55;transform:none;box-shadow:none}
+.sidebar{width:240px;background:#fff;backdrop-filter:none;padding:1.7rem 1rem}
+.brand{gap:.65rem;padding:.2rem .6rem 1.8rem}.brand .logo,.auth-brand .logo{background:#123d39;color:#fff;box-shadow:none;font-size:.75rem;letter-spacing:-.04em;font-weight:800;border-radius:10px}
+.brand .name{letter-spacing:-.03em;font-size:1.12rem}.brand small{display:block;font-size:.68rem;letter-spacing:.1em;font-weight:500;color:var(--muted);margin-top:.2rem}
+.nav-label{font-size:.68rem;color:var(--faint);letter-spacing:.08em;padding:.5rem .8rem}
+.sidebar nav{gap:.3rem}.sidebar nav a{padding:.8rem;font-size:.86rem}.sidebar nav a.active{color:#075f57;background:#e6f3f0;font-weight:650}.sidebar nav .ic{font-family:Arial,sans-serif;font-size:1.05rem}
+.avatar{background:#e6f3f0;color:#0f766e}.side-user{padding:.8rem .4rem}.logout{border:none;text-align:left;padding:.6rem .5rem}
+.main{width:100%;min-width:0;max-width:1400px;margin:0 auto;padding:0 2.7rem 3rem;overflow-x:visible}
+.workspace-bar{display:flex;justify-content:space-between;align-items:center;gap:1rem;min-height:80px;border-bottom:1px solid var(--border);margin-bottom:2rem;font-size:.78rem;color:var(--muted)}
+.workspace-bar a{font-weight:600}.page-head{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:1.7rem}.page-head h2{font-size:1.65rem;font-weight:650;letter-spacing:-.04em}.page-head p{line-height:1.7;margin-top:.45rem}
+.page-head>p{margin-left:auto;max-width:55%;font-size:.8rem}.btn{border-radius:8px;font-weight:550;padding:.65rem 1rem;box-shadow:none}.btn-primary{background:#0f766e;color:#fff;box-shadow:none}.btn-primary:hover{background:#0b625b;box-shadow:none}.btn-danger{color:#be304f}.btn-success{color:#15803d}
+.stats{grid-template-columns:2fr 1fr 1fr;gap:1.1rem}.stat-card{padding:1.5rem;border-radius:14px;box-shadow:0 3px 12px #182c3b03}.stat-card .value{font-variant-numeric:tabular-nums;font-size:1.9rem;line-height:1.4;margin:.5rem 0}.stat-card .label{font-weight:500}.stat-note{font-size:.75rem;color:var(--muted);line-height:1.6}.balance-card{background:#123d39;border-color:#123d39;color:#fff}.balance-card .label,.balance-card .stat-note{color:#b5d3ce}.balance-card .value{font-size:2.3rem}.balance-card .value small{font-size:.75rem;font-weight:400;margin-left:.4rem;color:#b5d3ce}.balance-card a{color:#fff;text-decoration:underline;text-underline-offset:3px}
+.card{padding:1.5rem;box-shadow:0 3px 12px #182c3b03}.card h3{font-size:.95rem;font-weight:600}.card-heading{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:1rem}.card-heading h3{margin:0}.card-heading a{font-size:.8rem}
+th{font-size:.74rem;text-transform:none;letter-spacing:0;background:#f8fafb}td{font-size:.8rem;padding:1rem .9rem}.table-wrap{border-radius:10px}.empty{padding:2.5rem 1rem;white-space:normal;line-height:1.8}
+.badge-green{color:#137452;background:#eaf7ef}.badge-red{color:#b03049;background:#fff0f2}.badge-violet{color:#6943a8;background:#f1ecf8}.badge-blue{color:#196992;background:#eaf5fc}.badge-yellow{color:#976308;background:#fff7e3}.msg-error{color:#ac2c48;background:#fff0f3}.msg-ok{color:#166648;background:#eaf7ef}
+.quickstart{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem}.quickstart a{display:block;color:var(--text);padding:1rem;border:1px solid var(--border);border-radius:10px}.quickstart a:hover{border-color:var(--accent)}.step-no{display:block;font-size:.72rem;font-weight:700;color:#0f766e;margin-bottom:.6rem}.quickstart strong{font-size:.85rem;font-weight:600}.quickstart p{font-size:.77rem;color:var(--muted);line-height:1.7;margin-top:.35rem}
+.key-policy-picker{margin-top:.8rem;max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:.8rem}.key-choice{display:flex;align-items:center;gap:.6rem;padding:.4rem;font-size:.82rem;overflow-wrap:anywhere}.key-choice input{width:auto;accent-color:var(--accent)}.key-policy-note{font-size:.78rem;color:var(--muted);line-height:1.7;margin:.7rem 0}.key-policy-form{display:grid;grid-template-columns:1fr 1fr auto;gap:1rem;align-items:end}.key-policy-form .form-group{margin:0}.key-edit{border:1px solid #91bdb5;background:#f9fcfb}.key-models-cell{max-width:240px;white-space:normal;overflow-wrap:anywhere;line-height:1.6}
+@media(max-width:1050px){.main{padding:0 1.4rem 2rem}.sidebar{width:210px}.stats{grid-template-columns:1.5fr 1fr}.stats .stat-card:last-child{grid-column:1/-1}.quickstart{gap:.7rem}.key-policy-form{grid-template-columns:1fr 1fr}.key-policy-form button{grid-column:1/-1;justify-content:center}}
+@media(max-width:820px){.sidebar{width:100%;height:auto;padding:.4rem .4rem calc(.4rem + env(safe-area-inset-bottom));overflow-x:auto}.sidebar nav{justify-content:flex-start;gap:.2rem;min-width:max-content}.sidebar nav a{min-width:68px;padding:.55rem .6rem}.sidebar .nav-label{display:none}.main{padding:0 1rem 7rem}.workspace-bar{min-height:65px;margin-bottom:1.5rem}.page-head{align-items:flex-start;flex-direction:column}.page-head>p{margin:0;max-width:none}.page-head h2{font-size:1.4rem}.stats{grid-template-columns:1fr 1fr}.stats .balance-card{grid-column:1/-1}.stats .stat-card:last-child{grid-column:auto}.stat-card{padding:1.2rem}.quickstart{grid-template-columns:1fr}.quickstart a{padding:1rem}.card{padding:1.1rem}.key-policy-form{grid-template-columns:1fr}.key-policy-form button{grid-column:auto}.side-foot,.brand{display:none}}
 </style>
 </head>
 <body>
 
+<div id="page-home" class="landing">
+  <header class="landing-nav"><strong id="site-name">TrueCore AI</strong><div class="links"><a href="#home-pricing">模型价格</a><a id="home-docs" href="docs.html">接入文档</a><button class="btn" onclick="showAuth('login')">登录</button><button class="btn btn-primary" onclick="showAuth('register')">开始使用</button></div></header>
+  <section class="hero"><span class="badge badge-violet">首发 · ChatGPT 模型接入</span><h1>真实模型，<br>稳定连接。</h1><p>使用兼容接口接入你的客户端。用 CNY 或 USDT 兑换积分，按模型实际 token 用量消费，在控制台管理密钥、充值和用量。</p><div class="hero-actions"><button class="btn btn-primary" onclick="showAuth('register')">创建账号</button><a class="btn" href="#home-pricing">查看积分价格</a></div></section>
+  <section><h2>从接入到日常使用</h2><div class="landing-grid"><article class="card"><h3>专注桌面 AI 接入</h3><p>首发提供 ChatGPT 系列模型。按文档配置客户端，具体型号与支持能力以已公布的价格和教程为准。</p></article><article class="card"><h3>价格与用量可查</h3><p>输入、输出和缓存分别以积分定价。订单保留付款币种、兑换率与到账积分快照。</p></article><article class="card"><h3>密钥由你管理</h3><p>在控制台创建或撤销 API Key，按模型和时间查询自己的调用记录。</p></article></div></section>
+  <section id="home-pricing"><h2>模型积分价格</h2><p class="muted">以下均为每 100 万 token 的积分数。价格变更适用于新请求。</p><div id="home-rates" class="hint"></div><div id="home-site-error" role="status"></div><div class="card table-wrap" style="margin-top:1rem"><table><thead><tr><th>模型</th><th>输入积分</th><th>输出积分</th><th>缓存读取积分</th><th>缓存写入积分</th></tr></thead><tbody id="home-prices"><tr><td colspan="5">正在读取价格…</td></tr></tbody></table></div></section>
+  <section><h2>三步开始</h2><div class="landing-grid"><article class="card"><h3>01 · 注册并充值</h3><p>查看当前兑换率，选择支付方式创建订单。按订单精确金额付款并等待确认。</p></article><article class="card"><h3>02 · 创建 API Key</h3><p>复制一次性显示的密钥，保存在自己的客户端中。不要把密钥发到聊天窗口。</p></article><article class="card"><h3>03 · 配置客户端</h3><p>从文档复制 API Base 和模型名。登录后可查看配置助手是否已开放。</p></article></div></section>
+  <footer>模型可用性和价格以当前配置为准。请在接入文档中核对客户端支持的协议。</footer>
+</div>
+
 <!-- ===================== Auth ===================== -->
 <div id="page-auth" class="auth-wrap hidden">
   <div class="auth-box">
-    <div class="auth-brand"><div class="logo">⚡</div></div>
-    <h2>API Console</h2>
+    <button class="btn btn-ghost" type="button" onclick="showHome()">← 返回首页</button>
+    <div class="auth-brand"><div class="logo" aria-hidden="true">TC</div></div>
+    <h2>TrueCore AI</h2>
     <p class="auth-sub">登录以管理你的密钥、额度与用量</p>
     <div class="seg">
       <button class="tab active" onclick="switchAuthTab('login')">登录</button>
@@ -251,14 +293,16 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
 <!-- ===================== App ===================== -->
 <div id="page-app" class="app hidden">
   <aside class="sidebar">
-    <div class="brand"><div class="logo">⚡</div><div class="name">API Console</div></div>
-    <nav>
-      <a href="#dashboard" class="active" data-page="dashboard"><span class="ic">◎</span>概览</a>
-      <a href="#keys" data-page="keys"><span class="ic">⚿</span>API Keys</a>
-      <a href="#topup" data-page="topup"><span class="ic">＋</span>充值</a>
-      <a href="#usage" data-page="usage"><span class="ic">▤</span>用量</a>
-      <a href="#quota" data-page="quota"><span class="ic">◈</span>额度</a>
-      <a href="#settings" data-page="settings"><span class="ic">⚙</span>设置</a>
+    <div class="brand"><div class="logo" aria-hidden="true">TC</div><div class="name">TrueCore AI<small>用户控制台</small></div></div>
+    <nav aria-label="用户导航">
+      <div class="nav-label">工作空间</div>
+      <a href="#dashboard" class="active" data-page="dashboard"><span class="ic">◎</span>账户概览</a>
+      <a href="#keys" data-page="keys"><span class="ic">⚿</span>API 密钥</a>
+      <a href="#topup" data-page="topup"><span class="ic">＋</span>充值积分</a>
+      <a href="#usage" data-page="usage"><span class="ic">▤</span>消费记录</a>
+      <a href="#quota" data-page="quota" id="nav-quota" class="hidden"><span class="ic">◈</span>上游额度</a>
+      <a href="#assistant" data-page="assistant"><span class="ic">◇</span>配置助手</a>
+      <a href="#settings" data-page="settings"><span class="ic">⚙</span>账户设置</a>
       <a href="#admin" data-page="admin" id="nav-admin" class="hidden"><span class="ic">★</span>管理</a>
     </nav>
     <div class="side-foot">
@@ -267,34 +311,49 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
     </div>
   </aside>
 
-  <div class="main">
+  <main class="main">
+    <header class="workspace-bar"><span>TrueCore AI / 用户控制台</span><a id="workspace-docs" href="./docs.html" target="_blank" rel="noopener">接入文档 ↗</a></header>
     <!-- Dashboard -->
     <section id="sec-dashboard">
-      <div class="page-head"><h2>概览</h2><p>账户状态一览</p></div>
+      <div class="page-head"><div><h2>欢迎回来</h2><p id="dash-email">管理你的模型接入与消费。</p></div><a class="btn btn-primary" href="#topup">充值 credits ↗</a></div>
+      <div id="dashboard-error" role="status" class="msg msg-error hidden"></div>
       <div class="stats">
-        <div class="stat-card"><div class="label">余额</div><div class="value" id="dash-balance">-</div></div>
-        <div class="stat-card"><div class="label">活跃 API Keys</div><div class="value" id="dash-keys">-</div></div>
-        <div class="stat-card"><div class="label">账号</div><div class="value sm" id="dash-email">-</div></div>
-        <div class="stat-card"><div class="label">计费状态</div><div class="value sm" id="dash-plan">-</div></div>
+        <div class="stat-card balance-card"><div class="label">可用余额</div><div class="value"><span id="dash-balance">—</span><small>credits</small></div><div class="stat-note">全部 API Key 共享余额 · <a href="#usage">查看消费记录</a></div></div>
+        <div class="stat-card"><div class="label">有效 API Key</div><div class="value"><span id="dash-keys">—</span><small class="muted" style="font-size:.85rem"> / 10</small></div><a class="stat-note" href="#keys">管理密钥与模型权限 →</a></div>
+        <div class="stat-card"><div class="label">计费方式</div><div class="value sm" id="dash-plan">—</div><div class="stat-note">实际用量结算<br>实付 credits 长期有效</div></div>
+      </div>
+      <div class="card"><div class="card-heading"><h3>开始使用</h3><span class="muted" style="font-size:.75rem">首次接入，只需三步</span></div>
+        <div class="quickstart"><a href="#topup"><span class="step-no">01 / 充值</span><strong>准备 credits</strong><p>选择付款方式，确认积分到账后开始使用。</p></a><a href="#keys"><span class="step-no">02 / 密钥</span><strong>创建专用 API Key</strong><p>为每个客户端设置独立密钥和模型权限。</p></a><a id="dashboard-docs" href="./docs.html" target="_blank" rel="noopener"><span class="step-no">03 / 接入</span><strong>配置你的桌面应用</strong><p>按接入文档填写服务地址、API Key 和模型。</p></a></div>
       </div>
       <div class="card">
-        <h3>最近用量</h3>
-        <div class="table-wrap"><table><thead><tr><th>时间</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>费用</th><th>状态</th></tr></thead>
+        <div class="card-heading"><h3>最近消费</h3><a href="#usage">全部记录 →</a></div>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>模型</th><th>输入 tokens</th><th>输出 tokens</th><th>消费 credits</th><th>状态</th></tr></thead>
         <tbody id="dash-usage"></tbody></table></div>
       </div>
     </section>
 
     <!-- Keys -->
     <section id="sec-keys" class="hidden">
-      <div class="page-head"><h2>API Keys</h2><p>用于调用代理的密钥；创建后仅显示一次，请立即保存</p></div>
+      <div class="page-head"><div><h2>API 密钥</h2><p>为不同客户端创建独立 Key，共享账户 credits 余额。</p></div></div>
       <div class="card">
-        <div class="inline-form" style="margin-bottom:.8rem">
-          <div class="form-group" style="flex:1;min-width:200px"><label>名称 (可选)</label><input id="key-name" placeholder="例如：my-app"></div>
-          <button class="btn btn-primary" onclick="createKey()">＋ 创建新 Key</button>
+        <div class="card-heading"><h3>创建 API Key</h3><span id="keys-count" class="muted" style="font-size:.8rem">最多 10 个有效 Key</span></div>
+        <div class="key-policy-form">
+          <div class="form-group"><label for="key-name">名称（可选）</label><input id="key-name" placeholder="例如：我的 WorkBuddy" maxlength="100"></div>
+          <div class="form-group"><label for="key-scope">可用模型</label><select id="key-scope" onchange="toggleKeyModels('key')"><option value="all">全部可用模型（默认）</option><option value="selected">指定模型</option><option value="none">禁止调用所有模型</option></select></div>
+          <button id="key-create" class="btn btn-primary" onclick="createKey()">＋ 创建 Key</button>
         </div>
+        <div id="key-models" class="key-policy-picker hidden"></div>
+        <p class="key-policy-note">默认可调用平台已上架且账户有权使用的模型。密钥明文仅在创建成功时显示一次。</p>
+        <div id="keys-error" role="status" class="msg msg-error hidden"></div>
         <div id="new-key-msg"></div>
-        <div class="table-wrap"><table><thead><tr><th>前缀</th><th>名称</th><th>创建时间</th><th>最后使用</th><th>状态</th><th></th></tr></thead>
+        <div class="table-wrap"><table><thead><tr><th>前缀</th><th>名称</th><th>模型权限</th><th>创建时间</th><th>最后使用</th><th>状态</th><th></th></tr></thead>
         <tbody id="keys-list"></tbody></table></div>
+      </div>
+      <div id="key-edit" class="card key-edit hidden">
+        <div class="card-heading"><h3 id="key-edit-title">修改模型权限</h3><button class="btn btn-sm" onclick="closeKeyPolicy()">取消</button></div>
+        <label class="field-label" for="edit-key-scope">可用模型</label><select id="edit-key-scope" onchange="toggleKeyModels('edit-key')"><option value="all">全部可用模型</option><option value="selected">指定模型</option><option value="none">禁止调用所有模型</option></select>
+        <div id="edit-key-models" class="key-policy-picker hidden"></div><p class="key-policy-note">保存后应用于新请求。指定列表为空时不能保存；需要暂停使用时请选择“禁止调用所有模型”。</p>
+        <p id="key-edit-msg" class="key-policy-note" role="status"></p><button id="key-policy-save" class="btn btn-primary" onclick="saveKeyPolicy()">保存权限</button>
       </div>
     </section>
 
@@ -316,12 +375,12 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
 
     <!-- Usage -->
     <section id="sec-usage" class="hidden">
-      <div class="page-head"><h2>用量明细</h2><p>每条请求的 token、费用与实际服务它的上游账号</p></div>
+      <div class="page-head"><h2>消费记录</h2><p>查看每次调用的模型、token 用量与 credits 消费。</p></div>
       <div class="stats" id="usage-charts"></div>
       <div class="card filter-bar">
         <div class="fbox"><label>模型</label>
           <select id="uf-model" onchange="applyUsageFilters()"><option value="">全部模型</option></select></div>
-        <div class="fbox"><label>账号</label>
+        <div class="fbox hidden" id="uf-account-box"><label>上游账号</label>
           <select id="uf-account" onchange="applyUsageFilters()"><option value="">全部账号</option></select></div>
         <div class="fbox" id="uf-user-box" style="display:none"><label>用户</label>
           <select id="uf-user" onchange="applyUsageFilters()"><option value="">全部用户</option></select></div>
@@ -329,7 +388,7 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
         <span class="muted" id="uf-count" style="font-size:.8rem;margin-left:auto"></span>
       </div>
       <div class="card">
-        <div class="table-wrap"><table><thead><tr id="usage-thead"><th>时间</th><th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th></tr></thead>
+        <div class="table-wrap"><table><thead><tr id="usage-thead"><th>时间</th><th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用（积分）</th><th>状态</th></tr></thead>
         <tbody id="usage-list"></tbody></table></div>
         <div style="margin-top:1rem;text-align:center"><button class="btn btn-ghost btn-sm" id="usage-more" onclick="loadMoreUsage()">加载更多</button></div>
       </div>
@@ -337,9 +396,9 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
 
     <!-- Quota / entitlements -->
     <section id="sec-quota" class="hidden">
-      <div class="page-head"><h2>我的额度</h2><p>你的余额、计费状态与可用范围（由管理员设置）</p></div>
+      <div class="page-head"><h2>上游额度</h2><p>管理员视图 · 查看模型供应与上游账号状态。</p></div>
       <div class="stats">
-        <div class="stat-card"><div class="label">余额</div><div class="value" id="q-balance">-</div></div>
+        <div class="stat-card"><div class="label">积分余额</div><div class="value" id="q-balance">-</div></div>
         <div class="stat-card"><div class="label">计费状态</div><div class="value sm" id="q-plan">-</div></div>
       </div>
       <div class="card">
@@ -359,9 +418,14 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
       </div>
     </section>
 
+    <section id="sec-assistant" class="hidden">
+      <div class="page-head"><h2>客户端配置助手</h2><p>说明你使用的客户端和版本，助手会给出配置建议。请勿发送真实 API Key。</p></div>
+      <div class="card"><p id="assistant-info" class="muted">正在读取助手状态…</p><a id="assistant-docs" href="docs.html" class="btn" style="margin-top:1rem">接入文档</a><button class="btn" onclick="clearAssistant()">清空对话</button><div id="assistant-chat" role="log" aria-live="polite"></div><form onsubmit="return sendAssistant(event)"><div class="form-group"><label for="assistant-input">配置问题</label><textarea id="assistant-input" rows="4" maxlength="2000" placeholder="例如：我在某客户端中填写 API Base 后收到 401，应该检查哪些设置？" required></textarea></div><button id="assistant-send" class="btn btn-primary" type="submit" disabled>发送</button><p id="assistant-error" class="hint" role="status"></p></form></div>
+    </section>
+
     <!-- Settings -->
     <section id="sec-settings" class="hidden">
-      <div class="page-head"><h2>设置</h2><p>账户与安全</p></div>
+      <div class="page-head"><h2>账户设置</h2><p>管理登录密码与账户安全。</p></div>
       <div class="card" style="max-width:460px">
         <h3>修改密码</h3>
         <div id="pw-msg"></div>
@@ -375,11 +439,17 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
           <button class="btn btn-primary" type="submit">保存</button>
         </form>
       </div>
+      <button class="btn btn-ghost" onclick="doLogout()">退出登录</button>
     </section>
 
     <!-- Admin -->
     <section id="sec-admin" class="hidden">
       <div class="page-head"><h2>管理</h2><p>超级管理员：确认充值、管理用户额度与可用模型</p></div>
+      <div class="card"><h3>站点、积分兑换与配置助手</h3><div id="commerce-msg" role="status"></div><form onsubmit="return saveCommerceSettings(event)"><div class="settings-grid">
+        <div class="form-group"><label>站点名称</label><input id="cs-name" maxlength="80" required></div><div class="form-group"><label>公开 API Base（含 /v1）</label><input id="cs-base" type="url" placeholder="https://api.example.com/v1"></div><div class="form-group"><label>接入文档 URL（空值使用内置文档）</label><input id="cs-docs" type="url"></div>
+        <div class="form-group"><label>1 CNY 兑换积分（空值关闭）</label><input id="cs-cny" inputmode="decimal" placeholder="由管理员设置"></div><div class="form-group"><label>1 USDT 兑换积分（空值关闭）</label><input id="cs-usdt" inputmode="decimal" placeholder="由管理员设置"></div><div class="form-group"><label>助手模型（使用下方已定价模型名）</label><input id="cs-model"></div><div class="form-group"><label>助手每日每人次数（1–100）</label><input id="cs-limit" type="number" min="1" max="100" required></div><div class="form-group"><label>助手全站每日次数（1–10000）</label><input id="cs-global-limit" type="number" min="1" max="10000" required></div><div class="form-group"><label>助手最大输出 token（64–2048）</label><input id="cs-output" type="number" min="64" max="2048" required></div>
+        </div><label class="switch-row"><span>启用配置助手（运营方承担模型费用）</span><input id="cs-helper" type="checkbox"></label><button class="btn btn-primary" type="submit">保存站点配置</button></form></div>
+      <div class="card"><h3>模型积分定价 · 每 100 万 token</h3><p class="hint">未定价或停用的模型不可付费调用。缓存价格 0 表示免费缓存。旧请求使用开始时的价格版本。</p><div class="table-wrap"><table><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>状态</th><th></th></tr></thead><tbody id="admin-prices"></tbody></table></div><form onsubmit="return savePointPrice(event)"><div class="settings-grid" style="margin-top:1rem"><div class="form-group"><label>模型名</label><input id="price-model" maxlength="180" required oninput="selectPriceVersion()"></div><div class="form-group"><label>输入积分</label><input id="price-input" inputmode="decimal" required></div><div class="form-group"><label>输出积分</label><input id="price-output" inputmode="decimal" required></div><div class="form-group"><label>缓存读取积分</label><input id="price-read" inputmode="decimal" required></div><div class="form-group"><label>缓存写入积分</label><input id="price-write" inputmode="decimal" required></div></div><label class="switch-row"><span>上架此模型</span><input type="checkbox" id="price-enabled" checked></label><button class="btn btn-primary" type="submit">保存模型价格</button><span id="price-msg" role="status"></span></form></div>
       <div class="card">
         <h3>待确认充值</h3>
         <div class="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>方式</th><th>金额</th><th>TX Hash</th><th>状态</th><th></th></tr></thead>
@@ -387,7 +457,7 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
       </div>
       <div class="card">
         <h3>用户</h3>
-        <div class="table-wrap"><table><thead><tr><th>邮箱</th><th>余额</th><th>计费</th><th>可用范围</th><th>注册</th><th></th></tr></thead>
+        <div class="table-wrap"><table><thead><tr><th>邮箱</th><th>积分余额</th><th>计费</th><th>可用范围</th><th>注册</th><th></th></tr></thead>
         <tbody id="admin-users"></tbody></table></div>
       </div>
       <div class="card">
@@ -397,17 +467,17 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
         <tbody id="admin-accounts"></tbody></table></div>
       </div>
       <div class="card">
-        <h3>手动调整余额</h3>
+        <h3>手动调整积分</h3>
         <div id="credit-msg"></div>
         <div class="inline-form">
           <div class="form-group"><label>用户 ID</label><input id="credit-uid" style="width:230px"></div>
-          <div class="form-group"><label>金额 (负数=扣减)</label><input type="number" id="credit-amount" step="0.01" style="width:130px"></div>
+          <div class="form-group"><label>积分 (负数=扣减)</label><input type="number" id="credit-amount" step="0.01" style="width:130px"></div>
           <div class="form-group" style="flex:1;min-width:140px"><label>备注</label><input id="credit-note"></div>
           <button class="btn btn-primary" onclick="doAdminCredit()">提交</button>
         </div>
       </div>
     </section>
-  </div>
+  </main>
 </div>
 
 <!-- ===================== User-limits modal (admin) ===================== -->
@@ -443,664 +513,6 @@ td code{background:var(--bg-2);padding:.15rem .4rem;border-radius:6px;font-size:
   </div>
 </div>
 
-<script>
-const BASE = location.pathname.replace(/\/ui\/?$/, '');
-let token = localStorage.getItem('portal_token');
-let isAdmin = false;
-let selectedMethod = null;
-let usageCursor = '';
-let adminUsers = [], allModels = [], allAccounts = [], editingUserId = null;
-
-function api(path, opts = {}) {
-  const headers = {'Content-Type': 'application/json'};
-  if (token) headers['Authorization'] = 'Bearer ' + token;
-  return fetch(BASE + path, {...opts, headers}).then(async r => {
-    const data = r.status === 204 ? {} : await r.json().catch(() => ({}));
-    if (!r.ok) throw {status: r.status, message: data.error || 'request failed'};
-    return data;
-  });
-}
-
-// ---- Auth ----
-function switchAuthTab(tab) {
-  document.querySelectorAll('.seg .tab').forEach(t => t.classList.remove('active'));
-  const btn = document.querySelector(`.seg .tab[onclick*="'${tab}'"]`);
-  if (btn) btn.classList.add('active');
-  document.getElementById('form-login').classList.toggle('hidden', tab !== 'login');
-  document.getElementById('form-register').classList.toggle('hidden', tab !== 'register');
-  document.getElementById('form-code').classList.toggle('hidden', tab !== 'code');
-  document.getElementById('auth-msg').innerHTML = '';
-  if (tab === 'code') resetCode();
-}
-
-// Email-code login (two phases: request code, then verify).
-let codeSent = false;
-function resetCode() {
-  codeSent = false;
-  document.getElementById('code-step2').classList.add('hidden');
-  document.getElementById('code-resend').classList.add('hidden');
-  document.getElementById('code-input').value = '';
-  document.getElementById('code-submit').textContent = '发送验证码';
-}
-async function doCode(e) {
-  e.preventDefault();
-  const email = document.getElementById('code-email').value.trim();
-  try {
-    if (!codeSent) {
-      await api('/login/code/request', {method:'POST', body: JSON.stringify({email})});
-      codeSent = true;
-      document.getElementById('code-step2').classList.remove('hidden');
-      document.getElementById('code-resend').classList.remove('hidden');
-      document.getElementById('code-submit').textContent = '登录';
-      document.getElementById('code-input').focus();
-      showAuthMsg('验证码已发送，请查收邮箱', true);
-    } else {
-      const code = document.getElementById('code-input').value.trim();
-      const r = await api('/login/code/verify', {method:'POST', body: JSON.stringify({email, code})});
-      token = r.token; localStorage.setItem('portal_token', token);
-      enterApp();
-    }
-  } catch(err) { showAuthMsg(err.message); }
-}
-function showAuthMsg(msg, ok) {
-  document.getElementById('auth-msg').innerHTML = `<div class="msg ${ok ? 'msg-ok' : 'msg-error'}">${esc(msg)}</div>`;
-}
-function togglePw(btn) {
-  const inp = btn.parentElement.querySelector('input');
-  const show = inp.type === 'password';
-  inp.type = show ? 'text' : 'password';
-  btn.textContent = show ? '🙈' : '👁';
-}
-
-async function doLogin(e) {
-  e.preventDefault();
-  try {
-    const r = await api('/login', {method:'POST', body: JSON.stringify({
-      email: document.getElementById('login-email').value,
-      password: document.getElementById('login-pass').value
-    })});
-    token = r.token; localStorage.setItem('portal_token', token);
-    enterApp();
-  } catch(err) { showAuthMsg(err.message); }
-}
-async function doRegister(e) {
-  e.preventDefault();
-  try {
-    const r = await api('/register', {method:'POST', body: JSON.stringify({
-      email: document.getElementById('reg-email').value,
-      password: document.getElementById('reg-pass').value,
-      display_name: document.getElementById('reg-name').value
-    })});
-    token = r.token; localStorage.setItem('portal_token', token);
-    enterApp();
-  } catch(err) { showAuthMsg(err.message); }
-}
-// Hard reset on logout so no previous-account data can linger in memory/DOM.
-function doLogout() {
-  token = null; localStorage.removeItem('portal_token');
-  location.reload();
-}
-
-// ---- App shell ----
-async function enterApp() {
-  document.getElementById('page-auth').classList.add('hidden');
-  document.getElementById('page-app').classList.remove('hidden');
-  try {
-    const me = await api('/me');
-    isAdmin = !!me.user.is_admin;
-    document.getElementById('nav-admin').classList.toggle('hidden', !isAdmin);
-    document.getElementById('side-email').textContent = me.user.email;
-    document.getElementById('side-avatar').textContent = (me.user.email||'U').charAt(0).toUpperCase();
-  } catch(e) {}
-  navigate(location.hash.slice(1) || 'dashboard');
-}
-function navigate(page) {
-  if (!page || !document.getElementById('sec-' + page)) page = 'dashboard';
-  if (page === 'admin' && !isAdmin) page = 'dashboard';
-  document.querySelectorAll('[id^="sec-"]').forEach(s => s.classList.add('hidden'));
-  document.getElementById('sec-' + page).classList.remove('hidden');
-  document.querySelectorAll('.sidebar nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
-  if (page === 'dashboard') loadDashboard();
-  else if (page === 'keys') loadKeys();
-  else if (page === 'topup') loadTopup();
-  else if (page === 'usage') { usageCursor = ''; loadUsageFilterOptions(); loadUsage(true); loadUsageStats(); }
-  else if (page === 'quota') loadQuota();
-  else if (page === 'admin') loadAdmin();
-}
-
-// My entitlements: balance, billing status, allowed models/accounts.
-async function loadQuota() {
-  try {
-    const [me, wallet, lbl] = await Promise.all([api('/me'), api('/wallet'), api('/account-labels')]);
-    const u = me.user, labels = (lbl && lbl.labels) || {};
-    document.getElementById('q-balance').textContent = parseFloat(wallet.balance).toFixed(2);
-    document.getElementById('q-plan').innerHTML = u.unbilled
-      ? '<span class="badge badge-violet">免余额</span>' : '<span class="badge badge-gray">计费</span>';
-    const models = u.allowed_models || [], accts = u.allowed_auth_ids || [];
-    document.getElementById('q-models').innerHTML = models.length
-      ? models.map(m => `<span class="chip"><span class="dot"></span>${esc(m)}</span>`).join('')
-      : accts.length
-        ? '<span class="chip all">由所选认证文件支持的模型决定</span>'
-        : '<span class="chip all">全部模型</span>';
-    document.getElementById('q-accounts').innerHTML = accts.length
-      ? accts.map(a => `<span class="chip"><span class="dot"></span>${esc(labels[a] || '账号')}</span>`).join('')
-      : '<span class="chip all">全部账号</span>';
-    loadAccountQuota();
-  } catch(err) { if (err.status === 401) doLogout(); }
-}
-
-// Live upstream quota/balance for the user's allowed accounts.
-async function loadAccountQuota() {
-  const box = document.getElementById('q-quota');
-  const btn = document.getElementById('q-refresh');
-  box.innerHTML = '<p class="muted" style="font-size:.85rem">正在查询上游余额…</p>';
-  if (btn) btn.disabled = true;
-  try {
-    const res = await api('/quota');
-    const accts = (res && res.accounts) || [];
-    if (!accts.length) { box.innerHTML = '<p class="empty">暂无可查询余额的账号</p>'; return; }
-    box.innerHTML = accts.map(renderQuotaAccount).join('');
-  } catch(err) {
-    if (err.status === 401) { doLogout(); return; }
-    box.innerHTML = '<p class="qacct-err">余额查询失败</p>';
-  } finally { if (btn) btn.disabled = false; }
-}
-
-function renderQuotaAccount(a) {
-  const badge = providerBadge(a.provider);
-  const h = esc(a.handle || '');
-  const actions = `<div class="qacct-actions">
-    <button class="qbtn" title="刷新额度" onclick="refreshAccountQuota('${h}')">↻ 刷新</button>
-    ${a.can_reset ? `<button class="qbtn qbtn-reset" title="消耗一个重置额度以立即重置限流" onclick="resetAccountCredit('${h}')">重置额度${a.reset_credits ? ' ('+a.reset_credits+')' : ''}</button>` : ''}
-  </div>`;
-  let inner = '';
-  if (a.error) {
-    inner = `<div class="qacct-err">${esc(a.error)}</div>`;
-  } else {
-    if (a.details && a.details.length) {
-      inner += '<div class="qdetails">' + a.details.map(d =>
-        `<div class="qrow"><span>${esc(d.label)}</span><b>${esc(d.value)}</b></div>`).join('') + '</div>';
-    }
-    if (a.windows && a.windows.length) {
-      inner += '<div class="qsub">用量窗口</div>' + a.windows.map(renderQuotaMeter).join('');
-    }
-    if (a.note) inner += `<div class="qacct-note">${esc(a.note)}</div>`;
-    if (!inner) inner = '<div class="qacct-note">暂无数据</div>';
-  }
-  return `<div class="qacct" data-handle="${h}"><div class="qacct-head">${badge}<span class="name">${esc(a.label || '账号')}</span>${actions}</div>${inner}</div>`;
-}
-
-// Refresh a single account's live quota in place.
-async function refreshAccountQuota(handle) {
-  const card = document.querySelector(`.qacct[data-handle="${handle}"]`);
-  if (card) card.classList.add('busy');
-  try {
-    const a = await api('/quota/' + encodeURIComponent(handle));
-    if (card) card.outerHTML = renderQuotaAccount(a);
-  } catch(err) {
-    if (err.status === 401) { doLogout(); return; }
-    if (card) card.classList.remove('busy');
-  }
-}
-
-// Consume one Codex rate-limit reset credit for an account, then refresh it.
-async function resetAccountCredit(handle) {
-  if (!confirm('确认消耗一个「重置额度」来立即重置该账号的 5 小时限流？此操作不可撤销。')) return;
-  const card = document.querySelector(`.qacct[data-handle="${handle}"]`);
-  if (card) card.classList.add('busy');
-  try {
-    const a = await api('/quota/' + encodeURIComponent(handle) + '/reset', {method:'POST'});
-    if (card) {
-      card.outerHTML = renderQuotaAccount(a);
-      const fresh = document.querySelector(`.qacct[data-handle="${handle}"]`);
-      if (fresh) fresh.insertAdjacentHTML('beforeend', '<div class="qacct-msg ok">已重置</div>');
-    }
-  } catch(err) {
-    if (err.status === 401) { doLogout(); return; }
-    if (card) {
-      card.classList.remove('busy');
-      const old = card.querySelector('.qacct-msg'); if (old) old.remove();
-      card.insertAdjacentHTML('beforeend', `<div class="qacct-msg err">${esc(err.message || '重置失败')}</div>`);
-    }
-  }
-}
-
-function renderQuotaMeter(w) {
-  const rem = (w.remaining_percent == null) ? null : Math.max(0, Math.min(100, w.remaining_percent));
-  const pct = rem == null ? '--' : Math.round(rem) + '%';
-  const cls = rem == null ? '' : (rem <= 10 ? 'danger' : (rem <= 30 ? 'warn' : ''));
-  const width = rem == null ? 0 : rem;
-  const reset = w.resets_at ? `重置于 ${fmtTime(w.resets_at)}` : '';
-  return `<div class="qmeter">
-    <div class="qmeter-top"><span class="qmeter-label">${esc(w.label)}</span>
-      <span><span class="qmeter-pct">${pct}</span>${reset ? ` <span class="qmeter-reset">· ${esc(reset)}</span>` : ''}</span></div>
-    <div class="qbar ${cls}"><span style="width:${width}%"></span></div>
-  </div>`;
-}
-
-function providerBadge(p) {
-  const map = {claude:['Claude','badge-yellow'], codex:['Codex','badge-violet'], antigravity:['Antigravity','badge-blue']};
-  const m = map[(p||'').toLowerCase()] || [p || '账号','badge-gray'];
-  return `<span class="badge ${m[1]}">${esc(m[0])}</span>`;
-}
-window.addEventListener('hashchange', () => navigate(location.hash.slice(1)));
-
-// ---- Dashboard ----
-async function loadDashboard() {
-  try {
-    const [me, wallet, usage, keys] = await Promise.all([
-      api('/me'), api('/wallet'), api('/usage?limit=10'), api('/api-keys')
-    ]);
-    document.getElementById('dash-email').textContent = me.user.email;
-    document.getElementById('dash-balance').textContent = parseFloat(wallet.balance).toFixed(2);
-    document.getElementById('dash-keys').textContent = keys.keys.filter(k => !k.revoked_at).length;
-    document.getElementById('dash-plan').innerHTML = me.user.unbilled
-      ? '<span class="badge badge-violet">免余额</span>' : '<span class="badge badge-gray">计费</span>';
-    const tbody = document.getElementById('dash-usage');
-    tbody.innerHTML = usage.records.length ? usage.records.map(r => `<tr>
-      <td>${fmtTime(r.created_at)}</td><td>${esc(r.model)}</td><td>${esc(r.auth_label || r.auth_id || '-')}</td>
-      <td>${r.input_tokens}</td><td>${r.output_tokens}</td>
-      <td>${parseFloat(r.cost).toFixed(4)}</td><td>${statusBadge(r.status)}</td></tr>`).join('')
-      : '<tr><td colspan="7" class="empty">暂无记录</td></tr>';
-  } catch(err) { if (err.status === 401) doLogout(); }
-}
-
-// ---- Keys ----
-async function loadKeys() {
-  try {
-    const r = await api('/api-keys');
-    const tbody = document.getElementById('keys-list');
-    tbody.innerHTML = r.keys.length ? r.keys.map(k => `<tr>
-      <td><code>${esc(k.key_prefix)}…</code></td><td>${esc(k.name||'-')}</td>
-      <td>${fmtTime(k.created_at)}</td><td>${k.last_used_at ? fmtTime(k.last_used_at) : '-'}</td>
-      <td>${k.revoked_at ? '<span class="badge badge-red">已吊销</span>' : '<span class="badge badge-green">活跃</span>'}</td>
-      <td style="text-align:right">${k.revoked_at ? '' : `<button class="btn btn-danger btn-sm" onclick="revokeKey('${k.id}')">吊销</button>`}</td>
-    </tr>`).join('') : '<tr><td colspan="6" class="empty">还没有 Key，点上方创建一个</td></tr>';
-  } catch(err) { if (err.status === 401) doLogout(); }
-}
-async function createKey() {
-  try {
-    const name = document.getElementById('key-name').value;
-    const r = await api('/api-keys', {method:'POST', body: JSON.stringify({name})});
-    document.getElementById('new-key-msg').innerHTML = `<div class="msg msg-ok">
-      Key 已创建，请立即复制（仅显示一次）：
-      <div class="copy-wrap"><code id="new-key-val">${esc(r.key)}</code>
-      <button class="btn btn-sm btn-primary" onclick="copyText('new-key-val')">复制</button></div></div>`;
-    document.getElementById('key-name').value = '';
-    loadKeys();
-  } catch(err) { document.getElementById('new-key-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
-}
-async function revokeKey(id) {
-  if (!confirm('确认吊销此 Key？此操作不可逆。')) return;
-  try { await api('/api-keys/' + id, {method:'DELETE'}); loadKeys(); }
-  catch(err) { alert(err.message); }
-}
-
-// ---- Topup ----
-async function loadTopup() {
-  try {
-    const [methods, orders] = await Promise.all([api('/topup/methods'), api('/topup?limit=50')]);
-    const grid = document.getElementById('topup-methods');
-    if (!methods.methods.length) {
-      grid.innerHTML = '<div class="msg msg-error">运营方未配置充值方式</div>';
-    } else {
-      grid.innerHTML = methods.methods.map(m => {
-        const key = m.method + ':' + (m.network || '');
-        const label = {'usdt':'USDT','wechat':'微信','alipay':'支付宝'}[m.method] || m.method;
-        return `<div class="method-card" data-key="${esc(key)}" data-method="${esc(m.method)}" data-network="${esc(m.network||'')}" onclick="selectMethod(this)">
-          <div class="name">${label}${m.network ? ' ' + esc(m.network) : ''}</div><div class="currency">${esc(m.currency)}</div></div>`;
-      }).join('');
-    }
-    selectedMethod = null;
-    document.getElementById('topup-form').classList.add('hidden');
-    document.getElementById('topup-order-detail').classList.add('hidden');
-    renderTopupOrders(orders.orders);
-  } catch(err) { if (err.status === 401) doLogout(); }
-}
-function selectMethod(el) {
-  document.querySelectorAll('.method-card').forEach(c => c.classList.remove('selected'));
-  el.classList.add('selected');
-  selectedMethod = {method: el.dataset.method, network: el.dataset.network};
-  document.getElementById('topup-form').classList.remove('hidden');
-  document.getElementById('topup-order-detail').classList.add('hidden');
-}
-async function createTopup() {
-  if (!selectedMethod) return;
-  const amount = parseFloat(document.getElementById('topup-amount').value);
-  if (!amount || amount <= 0) return alert('请输入有效金额');
-  try {
-    const r = await api('/topup', {method:'POST', body: JSON.stringify({amount, method: selectedMethod.method, network: selectedMethod.network})});
-    showOrderDetail(r); loadTopup();
-  } catch(err) { alert(err.message); }
-}
-function showOrderDetail(o) {
-  const detail = document.getElementById('topup-order-detail');
-  detail.classList.remove('hidden');
-  let html = `<h3>订单 ${esc(o.id).slice(0,8)}…</h3>
-    <p><strong>请支付：</strong><span style="font-size:1.3rem;font-weight:800;color:var(--accent-2)">${esc(o.amount)} ${esc(o.currency)}</span></p>
-    <p style="color:#fb7185;font-size:.85rem;margin:.5rem 0">请务必按此精确金额支付</p>`;
-  if (o.wallet_address && !o.wallet_address.startsWith('http'))
-    html += `<div class="copy-wrap"><code id="order-addr">${esc(o.wallet_address)}</code><button class="btn btn-sm btn-primary" onclick="copyText('order-addr')">复制</button></div>`;
-  if (o.qr_code_url) html += `<img class="qr-img" src="${esc(o.qr_code_url)}" alt="收款码">`;
-  if (o.notes) html += `<p class="hint">${esc(o.notes)}</p>`;
-  if (o.method === 'usdt' && o.status === 'pending')
-    html += `<div style="margin-top:1rem"><label class="field-label">提交 TX Hash</label>
-      <div class="copy-wrap"><input id="submit-txhash" placeholder="粘贴交易哈希">
-      <button class="btn btn-sm btn-success" onclick="submitTxHash('${o.id}')">提交</button></div></div>`;
-  html += `<p style="margin-top:.6rem;font-size:.85rem">状态：${statusBadge(o.status)}</p>`;
-  detail.innerHTML = html;
-}
-async function submitTxHash(id) {
-  const hash = document.getElementById('submit-txhash').value.trim();
-  if (!hash) return alert('请输入 TX Hash');
-  try { await api('/topup/' + id + '/submit', {method:'POST', body:JSON.stringify({tx_hash:hash})}); alert('已提交，等待确认'); loadTopup(); }
-  catch(err) { alert(err.message); }
-}
-async function cancelOrder(id) {
-  if (!confirm('确认取消此订单？')) return;
-  try { await api('/topup/' + id + '/cancel', {method:'POST'}); loadTopup(); } catch(err) { alert(err.message); }
-}
-function renderTopupOrders(orders) {
-  const tbody = document.getElementById('topup-list');
-  tbody.innerHTML = orders.length ? orders.map(o => `<tr>
-    <td>${fmtTime(o.created_at)}</td><td>${esc(o.method)}${o.network ? ' ' + esc(o.network) : ''}</td>
-    <td>${esc(o.amount)} ${esc(o.currency)}</td><td>${statusBadge(o.status)}</td>
-    <td style="text-align:right">${o.status === 'pending' || o.status === 'submitted' ?
-      `<button class="btn btn-sm btn-ghost" onclick="viewOrder('${o.id}')">查看</button>
-       <button class="btn btn-danger btn-sm" onclick="cancelOrder('${o.id}')">取消</button>` : ''}</td>
-  </tr>`).join('') : '<tr><td colspan="5" class="empty">暂无记录</td></tr>';
-}
-async function viewOrder(id) { try { showOrderDetail(await api('/topup/' + id)); } catch(err) { alert(err.message); } }
-
-// ---- Usage ----
-let usageShowUser = false;
-let usageFilters = {model:'', auth_id:'', user_id:''};
-let usageLoadedCount = 0;
-
-// Populate the filter dropdowns with the distinct values present in the caller's
-// visible usage. Shows the 用户 filter only for admins (scope=all).
-async function loadUsageFilterOptions() {
-  try {
-    const o = await api('/usage/filters');
-    const modelSel = document.getElementById('uf-model');
-    const acctSel = document.getElementById('uf-account');
-    modelSel.innerHTML = '<option value="">全部模型</option>' +
-      (o.models || []).map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
-    acctSel.innerHTML = '<option value="">全部账号</option>' +
-      (o.accounts || []).map(a => `<option value="${esc(a.id)}">${esc(a.label)}</option>`).join('');
-    const userBox = document.getElementById('uf-user-box');
-    if (o.scope === 'all') {
-      userBox.style.display = '';
-      document.getElementById('uf-user').innerHTML = '<option value="">全部用户</option>' +
-        (o.users || []).map(u => `<option value="${esc(u.id)}">${esc(u.email || u.id)}</option>`).join('');
-    } else {
-      userBox.style.display = 'none';
-    }
-    // Restore any active selections after repopulating.
-    modelSel.value = usageFilters.model;
-    acctSel.value = usageFilters.auth_id;
-    const us = document.getElementById('uf-user');
-    if (us) us.value = usageFilters.user_id;
-  } catch(err) { if (err.status === 401) doLogout(); }
-}
-
-function applyUsageFilters() {
-  usageFilters.model = document.getElementById('uf-model').value;
-  usageFilters.auth_id = document.getElementById('uf-account').value;
-  const us = document.getElementById('uf-user');
-  usageFilters.user_id = us ? us.value : '';
-  loadUsage(true);
-}
-
-function resetUsageFilters() {
-  usageFilters = {model:'', auth_id:'', user_id:''};
-  document.getElementById('uf-model').value = '';
-  document.getElementById('uf-account').value = '';
-  const us = document.getElementById('uf-user'); if (us) us.value = '';
-  loadUsage(true);
-}
-
-async function loadUsage(reset) {
-  const tbody = document.getElementById('usage-list');
-  if (reset) { usageCursor = ''; usageLoadedCount = 0; tbody.innerHTML = ''; }
-  try {
-    let url = '/usage?limit=50';
-    if (usageCursor) url += '&before=' + encodeURIComponent(usageCursor);
-    if (usageFilters.model) url += '&model=' + encodeURIComponent(usageFilters.model);
-    if (usageFilters.auth_id) url += '&auth_id=' + encodeURIComponent(usageFilters.auth_id);
-    if (usageFilters.user_id) url += '&user_id=' + encodeURIComponent(usageFilters.user_id);
-    const r = await api(url);
-    const records = (r && r.records) || [];
-    usageShowUser = !!(r && r.scope === 'all');
-    const cols = usageShowUser ? 11 : 10;
-    if (reset) {
-      document.getElementById('usage-thead').innerHTML =
-        `<th>时间</th>${usageShowUser ? '<th>用户</th>' : ''}<th>提供商</th><th>模型</th><th>账号</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>费用</th><th>状态</th>`;
-    }
-    const countEl = document.getElementById('uf-count');
-    if (!records.length) {
-      if (reset) tbody.innerHTML = `<tr><td colspan="${cols}" class="empty">暂无记录</td></tr>`;
-      if (countEl && reset) countEl.textContent = '共 0 条';
-      document.getElementById('usage-more').classList.add('hidden'); return;
-    }
-    document.getElementById('usage-more').classList.remove('hidden');
-    tbody.innerHTML += records.map(u => `<tr>
-      <td>${fmtTime(u.created_at)}</td>${usageShowUser ? `<td>${esc(u.user_email || '-')}</td>` : ''}<td>${esc(u.provider)}</td><td>${esc(u.model)}</td>
-      <td>${esc(u.auth_label || u.auth_id || '-')}</td>
-      <td>${u.input_tokens}</td><td>${u.output_tokens}</td><td>${u.cache_read_tokens}</td><td>${u.cache_write_tokens}</td>
-      <td>${parseFloat(u.cost).toFixed(4)}</td><td>${statusBadge(u.status)}</td></tr>`).join('');
-    usageCursor = records[records.length - 1].created_at;
-    usageLoadedCount += records.length;
-    if (countEl) countEl.textContent = `已显示 ${usageLoadedCount} 条${records.length < 50 ? '' : '+'}`;
-    if (records.length < 50) document.getElementById('usage-more').classList.add('hidden');
-  } catch(err) {
-    if (err.status === 401) { doLogout(); return; }
-    if (reset) tbody.innerHTML = `<tr><td colspan="11" class="empty">加载失败：${esc(err.message || '未知错误')}</td></tr>`;
-    document.getElementById('usage-more').classList.add('hidden');
-  }
-}
-function loadMoreUsage() { loadUsage(false); }
-
-async function loadUsageStats() {
-  try {
-    const r = await api('/usage/stats?days=30');
-    const container = document.getElementById('usage-charts');
-    container.innerHTML = '';
-    if (r.daily && r.daily.length > 0) {
-      const maxCost = Math.max(...r.daily.map(d => parseFloat(d.cost)), 0.001);
-      const barW = Math.max(4, Math.floor(500 / r.daily.length) - 2), chartH = 120;
-      const bars = r.daily.map((d, i) => {
-        const h = Math.max(1, (parseFloat(d.cost) / maxCost) * (chartH - 20));
-        return `<rect x="${i*(barW+2)}" y="${chartH-h}" width="${barW}" height="${h}" fill="url(#g)" rx="2"><title>${d.date}: ${parseFloat(d.cost).toFixed(4)}</title></rect>`;
-      }).join('');
-      container.innerHTML += `<div class="stat-card" style="grid-column:span 2;min-width:300px">
-        <div class="label">近 30 天日消费</div>
-        <div style="overflow-x:auto;margin-top:.5rem"><svg width="${r.daily.length*(barW+2)}" height="${chartH}" style="display:block">
-          <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs>${bars}</svg></div>
-        <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted);margin-top:.25rem">
-          <span>${r.daily[0]?.date?.slice(5)||''}</span><span>${r.daily[r.daily.length-1]?.date?.slice(5)||''}</span></div></div>`;
-    }
-    if (r.by_model && r.by_model.length > 0) {
-      const total = r.by_model.reduce((s, m) => s + parseFloat(m.cost), 0) || 1;
-      const colors = ['#6366f1','#22c55e','#f59e0b','#f43f5e','#a855f7','#06b6d4','#f97316','#ec4899'];
-      let html = '<div class="label">模型分布 (近 30 天)</div><div style="margin-top:.5rem">';
-      r.by_model.forEach((m, i) => {
-        const pct = (parseFloat(m.cost) / total * 100).toFixed(1);
-        html += `<div style="display:flex;align-items:center;gap:.5rem;margin:.35rem 0;font-size:.82rem">
-          <span style="width:9px;height:9px;border-radius:50%;background:${colors[i%colors.length]};flex-shrink:0"></span>
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(m.model)}</span>
-          <span class="muted">${pct}%</span><span style="font-weight:700">${parseFloat(m.cost).toFixed(4)}</span></div>`;
-      });
-      container.innerHTML += `<div class="stat-card" style="min-width:220px">${html}</div></div>`;
-    }
-  } catch(err) { /* non-critical */ }
-}
-
-// ---- Settings ----
-async function doChangePassword(e) {
-  e.preventDefault();
-  try {
-    await api('/change-password', {method:'POST', body: JSON.stringify({
-      old_password: document.getElementById('pw-old').value,
-      new_password: document.getElementById('pw-new').value
-    })});
-    document.getElementById('pw-msg').innerHTML = '<div class="msg msg-ok">密码已修改</div>';
-    document.getElementById('pw-old').value = ''; document.getElementById('pw-new').value = '';
-  } catch(err) { document.getElementById('pw-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
-}
-
-// ---- Admin ----
-async function loadAdmin() {
-  if (!isAdmin) return;
-  try {
-    const [ordersR, usersR] = await Promise.all([api('/admin/topup?limit=100'), api('/admin/users')]);
-    const active = ordersR.orders.filter(o => o.status === 'pending' || o.status === 'submitted');
-    document.getElementById('admin-orders').innerHTML = active.length ? active.map(o => `<tr>
-      <td>${fmtTime(o.created_at)}</td><td><code>${esc(o.user_id).slice(0,8)}…</code></td>
-      <td>${esc(o.method)}${o.network ? ' '+esc(o.network) : ''}</td><td>${esc(o.amount)} ${esc(o.currency)}</td>
-      <td>${o.tx_hash ? '<code>'+esc(o.tx_hash).slice(0,16)+'…</code>' : '-'}</td><td>${statusBadge(o.status)}</td>
-      <td style="text-align:right"><button class="btn btn-success btn-sm" onclick="adminConfirm('${o.id}')">确认</button></td>
-    </tr>`).join('') : '<tr><td colspan="7" class="empty">无待确认订单</td></tr>';
-
-    adminUsers = usersR.users;
-    document.getElementById('admin-users').innerHTML = adminUsers.map(u => `<tr>
-      <td>${esc(u.email)}${u.is_admin?' <span class="badge badge-violet">admin</span>':''}</td>
-      <td>${parseFloat(u.balance||'0').toFixed(2)}</td>
-      <td>${u.unbilled ? '<span class="badge badge-violet">免余额</span>' : '<span class="badge badge-gray">计费</span>'}</td>
-      <td>${limitSummary(u)}</td>
-      <td>${fmtTime(u.created_at)}</td>
-      <td style="text-align:right">
-        <button class="btn btn-sm btn-ghost" onclick="openUserModal('${u.id}')">管理</button>
-        <button class="btn btn-sm" onclick="document.getElementById('credit-uid').value='${u.id}'">选中</button></td>
-    </tr>`).join('');
-    loadAdminAccounts();
-  } catch(err) { if (err.status === 403) isAdmin = false; }
-}
-async function loadAdminAccounts() {
-  try {
-    const accounts = (await api('/admin/accounts')).accounts || [];
-    document.getElementById('admin-accounts').innerHTML = accounts.length ? accounts.map(a => `<tr>
-      <td>${esc(a.label || a.id)}</td><td>${esc(a.provider)}</td>
-      <td>${a.status && a.status!=='active' ? '<span class="badge badge-yellow">'+esc(a.status)+'</span>' : '<span class="badge badge-green">active</span>'}</td>
-      <td><input value="${esc(a.alias||'').replace(/"/g,'&quot;')}" data-id="${esc(a.id)}" placeholder="不填=Provider·短ID" style="min-width:150px"></td>
-      <td style="text-align:right"><button class="btn btn-sm btn-primary" onclick="saveAlias(this)">保存</button></td>
-    </tr>`).join('') : '<tr><td colspan="5" class="empty">暂无上游账号</td></tr>';
-  } catch(e) {}
-}
-async function saveAlias(btn) {
-  const input = btn.closest('tr').querySelector('input[data-id]');
-  try {
-    await api('/admin/accounts/alias', {method:'POST', body: JSON.stringify({id: input.dataset.id, label: input.value.trim()})});
-    const o = btn.textContent; btn.textContent = '已保存'; setTimeout(() => btn.textContent = o, 1500);
-  } catch(err) { alert(err.message); }
-}
-function limitSummary(u) {
-  const m = (u.allowed_models||[]).length, a = (u.allowed_auth_ids||[]).length;
-  const parts = [];
-  if (m) parts.push(`<span class="badge badge-blue">${m} 个模型</span>`);
-  if (a) parts.push(`<span class="badge badge-violet">${a} 个认证文件</span>`);
-  if (parts.length) return parts.join(' ');
-  return '<span class="muted">全部</span>';
-}
-async function adminConfirm(id) {
-  if (!confirm('确认此充值订单？将立即给用户加余额。')) return;
-  try { await api('/admin/topup/' + id + '/confirm', {method:'POST', body:'{}'}); loadAdmin(); } catch(err) { alert(err.message); }
-}
-async function doAdminCredit() {
-  const uid = document.getElementById('credit-uid').value.trim();
-  const amount = parseFloat(document.getElementById('credit-amount').value);
-  const note = document.getElementById('credit-note').value.trim();
-  if (!uid || !amount) return alert('请填写用户 ID 和金额');
-  try {
-    const r = await api('/admin/credit', {method:'POST', body:JSON.stringify({user_id:uid, amount, note})});
-    document.getElementById('credit-msg').innerHTML = `<div class="msg msg-ok">已更新，新余额：${r.balance}</div>`;
-    loadAdmin();
-  } catch(err) { document.getElementById('credit-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
-}
-
-// ---- Admin: per-user limits modal ----
-async function openUserModal(id) {
-  const u = adminUsers.find(x => x.id === id);
-  if (!u) return;
-  editingUserId = id;
-  document.getElementById('um-email').textContent = u.email;
-  document.getElementById('um-unbilled').checked = !!u.unbilled;
-  document.getElementById('um-allowreset').checked = !!u.allow_reset;
-  document.getElementById('um-msg').innerHTML = '';
-  umTab('models');
-  // Load the pickers once (models + accounts), then check the user's current sets.
-  try {
-    if (!allModels.length) allModels = (await api('/admin/models')).models || [];
-    if (!allAccounts.length) allAccounts = (await api('/admin/accounts')).accounts || [];
-  } catch(e) {}
-  const selM = new Set(u.allowed_models || []), selA = new Set(u.allowed_auth_ids || []);
-  document.getElementById('um-model-search').value = '';
-  document.getElementById('um-model-list').innerHTML = allModels.length ? allModels.map(m =>
-    `<label class="picker-item" data-name="${esc(m.toLowerCase())}"><input type="checkbox" value="${esc(m)}" ${selM.has(m)?'checked':''}><span>${esc(m)}</span></label>`
-  ).join('') : '<div class="empty">暂无模型（先在管理控制台添加上游账号）</div>';
-  document.getElementById('um-account-list').innerHTML = allAccounts.length ? allAccounts.map(a =>
-    `<label class="picker-item"><input type="checkbox" value="${esc(a.id)}" ${selA.has(a.id)?'checked':''}>
-     <span>${esc(a.label||a.id)} <span class="muted">· ${esc(a.provider)}${a.status&&a.status!=='active'?' ('+esc(a.status)+')':''}</span></span></label>`
-  ).join('') : '<div class="empty">暂无上游账号</div>';
-  document.getElementById('user-modal').classList.remove('hidden');
-}
-function closeUserModal() { document.getElementById('user-modal').classList.add('hidden'); editingUserId = null; }
-function umTab(which) {
-  document.querySelectorAll('.tab-sm').forEach(t => t.classList.toggle('active', t.dataset.tab === which));
-  document.getElementById('um-pane-models').classList.toggle('hidden', which !== 'models');
-  document.getElementById('um-pane-accounts').classList.toggle('hidden', which !== 'accounts');
-}
-function filterModels(q) {
-  q = q.trim().toLowerCase();
-  document.querySelectorAll('#um-model-list .picker-item').forEach(el =>
-    el.style.display = (!q || el.dataset.name.includes(q)) ? '' : 'none');
-}
-async function saveUserLimits() {
-  if (!editingUserId) return;
-  const models = [...document.querySelectorAll('#um-model-list input:checked')].map(i => i.value);
-  const accounts = [...document.querySelectorAll('#um-account-list input:checked')].map(i => i.value);
-  const unbilled = document.getElementById('um-unbilled').checked;
-  const allow_reset = document.getElementById('um-allowreset').checked;
-  try {
-    await api('/admin/users/' + editingUserId + '/limits', {method:'POST',
-      body: JSON.stringify({unbilled, allowed_models: models, allowed_auth_ids: accounts, allow_reset})});
-    closeUserModal(); loadAdmin();
-  } catch(err) { document.getElementById('um-msg').innerHTML = `<div class="msg msg-error">${esc(err.message)}</div>`; }
-}
-
-// ---- Helpers ----
-function fmtTime(s) {
-  if (!s) return '-';
-  const d = new Date(s), pad = n => String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function esc(s) { if (s === 0) return '0'; if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-function statusBadge(s) {
-  const m = {success:'badge-green',active:'badge-green',pending:'badge-yellow',submitted:'badge-blue',confirmed:'badge-green',error:'badge-red',cancelled:'badge-gray',expired:'badge-gray',revoked:'badge-red'};
-  return `<span class="badge ${m[s]||'badge-gray'}">${esc(s)}</span>`;
-}
-function copyText(id) {
-  const el = document.getElementById(id), text = el.textContent || el.value;
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = el.parentElement.querySelector('.btn');
-    if (btn) { const o = btn.textContent; btn.textContent = '已复制'; setTimeout(() => btn.textContent = o, 1500); }
-  });
-}
-
-// ---- Init ----
-// Reveal email-code login only when the server has SMTP configured.
-api('/config').then(cfg => {
-  if (cfg && cfg.email_login) {
-    document.getElementById('tab-code').classList.remove('hidden');
-    document.getElementById('alt-code').classList.remove('hidden');
-  }
-}).catch(() => {});
-
-if (token) {
-  api('/me').then(() => enterApp()).catch(() => { token = null; localStorage.removeItem('portal_token'); document.getElementById('page-auth').classList.remove('hidden'); });
-} else {
-  document.getElementById('page-auth').classList.remove('hidden');
-}
-</script>
+<script src="app.js"></script>
 </body>
 </html>

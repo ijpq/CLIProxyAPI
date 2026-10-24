@@ -24,6 +24,8 @@ const AutoServiceTier = "auto"
 
 // Record contains the usage statistics captured for a single provider request.
 type Record struct {
+	// EventID identifies one published accounting event, independently of its parent request.
+	EventID string
 	// RequestID uniquely identifies this specific model execution instance (UUID v4).
 	RequestID string
 	// TraceID identifies the parent inbound HTTP request when available (8-character hex).
@@ -630,6 +632,13 @@ type Plugin interface {
 	HandleUsage(ctx context.Context, record Record)
 }
 
+// SynchronousPlugin persists critical events before Publish returns.
+// Other plugins retain the existing asynchronous delivery behavior.
+type SynchronousPlugin interface {
+	Plugin
+	SynchronousUsage() bool
+}
+
 type queueItem struct {
 	ctx    context.Context
 	record Record
@@ -729,6 +738,9 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 	if m == nil {
 		return
 	}
+	if strings.TrimSpace(record.EventID) == "" {
+		record.EventID = uuid.NewString()
+	}
 	if strings.TrimSpace(record.RequestID) == "" {
 		if reqID := ExecutionRequestIDFromContext(ctx); reqID != "" {
 			record.RequestID = reqID
@@ -769,6 +781,14 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 		}
 	}
 	ctx = WithCapturedIdentity(ctx, record.APIKey, record.AccessProvider, record.IsNativeKey)
+	m.pluginsMu.RLock()
+	synchronous := append([]Plugin(nil), m.plugins...)
+	m.pluginsMu.RUnlock()
+	for _, plugin := range synchronous {
+		if syncPlugin, ok := plugin.(SynchronousPlugin); ok && syncPlugin.SynchronousUsage() {
+			safeInvoke(plugin, ctx, record)
+		}
+	}
 	// ensure worker is running even if Start was not called explicitly
 	m.Start(context.Background())
 	m.mu.Lock()
@@ -809,6 +829,9 @@ func (m *Manager) dispatch(item queueItem) {
 	}
 	for _, plugin := range plugins {
 		if plugin == nil {
+			continue
+		}
+		if syncPlugin, ok := plugin.(SynchronousPlugin); ok && syncPlugin.SynchronousUsage() {
 			continue
 		}
 		safeInvoke(plugin, item.ctx, item.record)

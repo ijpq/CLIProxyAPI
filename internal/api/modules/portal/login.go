@@ -90,12 +90,16 @@ func (m *Module) handleVerifyLoginCode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "login failed"})
 		return
 	}
+	if user.Status != "active" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "account suspended"})
+		return
+	}
 	token, err := m.tokens.Issue(user.ID, user.IsAdmin)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "issue token failed"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"token": token, "user": userView(user)})
+	c.JSON(http.StatusOK, gin.H{"token": token, "user": customerUserView(user)})
 }
 
 // getOrCreateUserByEmail returns the user with the given email, creating a

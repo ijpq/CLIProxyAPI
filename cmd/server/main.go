@@ -800,7 +800,12 @@ func run() (exitStatus int) {
 					password = localMgmtPassword
 				}
 
-				billingOpts := setupBilling(context.Background(), pgStoreInst)
+				billingOpts, errBilling := setupBilling(context.Background(), pgStoreInst)
+				if errBilling != nil {
+					restoreIO()
+					log.WithError(errBilling).Error("billing initialization failed; server was not started")
+					return 1
+				}
 				cancel, done := cmd.StartServiceBackgroundWithPluginHost(cfg, configFilePath, password, pluginHost, append(serverOptions, billingOpts...)...)
 
 				client := tui.NewClient(cfg.Port, password)
@@ -865,7 +870,11 @@ func run() (exitStatus int) {
 			managementasset.StartAutoUpdater(context.Background(), configFilePath)
 			misc.StartAntigravityVersionUpdater(context.Background())
 			registry.SetLocalModelCatalogs(localModel)
-			billingOpts := setupBilling(context.Background(), pgStoreInst)
+			billingOpts, errBilling := setupBilling(context.Background(), pgStoreInst)
+			if errBilling != nil {
+				log.WithError(errBilling).Error("billing initialization failed; server was not started")
+				return 1
+			}
 			if errStart := cmd.StartServiceWithPluginHost(cfg, configFilePath, password, pluginHost, append(serverOptions, billingOpts...)...); errStart != nil {
 				if log.StandardLogger().Out != os.Stderr {
 					_, _ = fmt.Fprintf(os.Stderr, "proxy service error: %v\n", errStart)

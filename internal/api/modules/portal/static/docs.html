@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>接入文档 · TrueCore AI</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f5f7f9;color:#182c3b;font:16px/1.8 system-ui,sans-serif}main{max-width:860px;margin:0 auto;padding:2rem 1.25rem 5rem}a{color:#0f766e}h1{font-size:2.4rem}h2{margin-top:2.5rem}p,li{color:#586b7c}pre{padding:1.25rem;background:#fff;border:1px solid #d6dee6;border-radius:12px;overflow:auto}code{font-family:ui-monospace,monospace}nav{display:flex;gap:1.5rem}aside{padding:1rem;border-left:3px solid #0f766e;background:#fff}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.8rem;border-bottom:1px solid #d6dee6}#api-base{overflow-wrap:anywhere}
+</style></head>
+<body><main><nav><a href="./">← 首页与价格</a><a href="./#keys">控制台</a></nav><h1>把模型接入你的客户端</h1><p>创建账号、充值积分并生成 API Key 后，在客户端填写 API Base、API Key 和模型名。</p>
+<aside>密钥只保存在你自己的客户端中。向配置助手求助时，使用 <code>YOUR_API_KEY</code> 占位符，删除日志和截图中的密钥。</aside>
+<h2>连接参数</h2><table><tbody><tr><th>OpenAI 兼容 API Base</th><td id="api-base">请在首页核对运营方公布的地址。</td></tr><tr><th>API Key</th><td>控制台 → API 密钥 → 创建 Key。明文仅显示一次。</td></tr><tr><th>模型名</th><td>复制首页已公布的模型名，或查询 <code>GET /v1/models</code>。</td></tr></tbody></table><p>部分客户端要求 API Base 包含 <code>/v1</code>，另一些会自动添加。请先核对客户端文档，避免出现 <code>/v1/v1</code>。Claude Messages、Gemini 原生客户端使用各自的协议路径，需要核对客户端是否允许自定义服务地址。</p>
+<h2>先用一个文本请求验证</h2><p>把示例地址和模型名替换为首页公布的值。把密钥放入你本机的环境变量，避免写入代码或分享记录。</p>
+<pre><code>curl https://api.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $CPA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"MODEL_FROM_PRICE_LIST","messages":[{"role":"user","content":"你好"}],"max_tokens":64}'</code></pre>
+<h2>积分如何计算</h2><p>CNY 和 USDT 是付款币种，分别按管理员设置的兑换率换成同一种积分。创建订单时保存兑换率和到账积分，之后调整兑换率不会改变旧订单。</p><p>模型价格以每 100 万 token 的积分数展示。输入、输出、缓存读取和缓存写入分别计费；缓存价格为 0 表示该项免费。价格修改适用于新请求，用量记录保留计费版本。历史货币余额需先由管理员对账。</p>
+<h2>常见错误</h2><table><thead><tr><th>现象</th><th>检查项目</th></tr></thead><tbody><tr><td>401</td><td>密钥是否完整、有效，是否被撤销；Authorization 是否使用 Bearer。</td></tr><tr><td>402</td><td>积分是否充足；充值订单是否已确认。</td></tr><tr><td>403</td><td>模型是否已上架并定价；账户与当前 API Key 是否允许使用该模型。</td></tr><tr><td>404</td><td>API Base、协议路径，以及客户端是否重复添加 /v1。</td></tr><tr><td>429</td><td>降低并发并按 Retry-After 重试；助手每日次数用尽后次日再试。</td></tr><tr><td>503</td><td>配置或计费服务暂时不可用。稍后重试并联系运营方。</td></tr></tbody></table>
+<h2>配置助手</h2><p>登录后打开“配置助手”，说明客户端名称、版本、已填写的 API Base 和脱敏错误信息。助手开放状态由运营方决定，次数和输出长度有限。助手不能修改你的设备，回答需要结合客户端官方文档核对。</p><p>付费接口当前要求通过 JSON 或模型 URL 明确指定模型；无法在执行前绑定价格的 WebSocket 和 multipart 请求暂不开放付费调用。</p>
+</main><script src="docs.js"></script></body></html>

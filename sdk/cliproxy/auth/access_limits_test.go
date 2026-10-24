@@ -167,6 +167,18 @@ func TestManagerAllowedModelsEnforcedAcrossExecutionModes(t *testing.T) {
 		t.Fatalf("forbidden request reached executor: execute=%d count=%d stream=%d", executor.executeCalls, executor.countCalls, executor.streamCalls)
 	}
 
+	// An explicitly empty policy must survive HTTP, streaming, and token counting.
+	emptyOpts := cliproxyexecutor.Options{Metadata: map[string]any{cliproxyexecutor.ModelsRestrictedMetadataKey: true, cliproxyexecutor.AllowedModelsMetadataKey: []string{}}}
+	_, emptyErr := manager.Execute(context.Background(), []string{provider}, cliproxyexecutor.Request{Model: model}, emptyOpts)
+	assertForbidden(t, emptyErr)
+	_, emptyErr = manager.ExecuteCount(context.Background(), []string{provider}, cliproxyexecutor.Request{Model: model}, emptyOpts)
+	assertForbidden(t, emptyErr)
+	_, emptyErr = manager.ExecuteStream(context.Background(), []string{provider}, cliproxyexecutor.Request{Model: model}, emptyOpts)
+	assertForbidden(t, emptyErr)
+	if executor.executeCalls != 0 || executor.countCalls != 0 || executor.streamCalls != 0 {
+		t.Fatal("empty policy reached upstream executor")
+	}
+
 	allowedOpts := cliproxyexecutor.Options{Metadata: map[string]any{
 		cliproxyexecutor.AllowedModelsMetadataKey: []string{model},
 	}}

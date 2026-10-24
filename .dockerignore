@@ -39,3 +39,16 @@ bin
 .bmad
 _bmad
 _bmad-output
+
+# Secrets, local operator instructions and generated artifacts
+.env
+.env.*
+secrets
+billing-events
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+node_modules
+coverage
+*.cover
+*.out

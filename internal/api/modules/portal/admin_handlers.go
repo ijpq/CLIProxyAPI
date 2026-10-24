@@ -45,9 +45,17 @@ func (m *Module) handleAdminListUsers(c *gin.Context) {
 	}
 	out := make([]gin.H, 0, len(users))
 	for _, u := range users {
-		bal, _ := m.store.GetWalletBalance(c.Request.Context(), u.ID)
+		bal, balanceErr := m.store.GetWalletBalance(c.Request.Context(), u.ID)
 		v := userView(u)
 		v["balance"] = bal
+		v["balance_unit"] = "POINTS"
+		if errors.Is(balanceErr, store.ErrLegacyBalance) {
+			v["balance"] = nil
+			v["balance_unit"] = "LEGACY"
+		} else if balanceErr != nil {
+			c.JSON(503, gin.H{"error": "wallet lookup failed"})
+			return
+		}
 		out = append(out, v)
 	}
 	c.JSON(http.StatusOK, gin.H{"users": out})
@@ -61,6 +69,10 @@ func (m *Module) handleAdminCredit(c *gin.Context) {
 	}
 	amountStr := strconv.FormatFloat(req.Amount, 'f', 6, 64)
 	newBalance, err := m.store.AdminCreditWallet(c.Request.Context(), req.UserID, amountStr, "", req.Note)
+	if errors.Is(err, store.ErrLegacyBalance) {
+		c.JSON(409, gin.H{"error": "historical wallet must be reconciled before points adjustments"})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "credit failed"})
 		return

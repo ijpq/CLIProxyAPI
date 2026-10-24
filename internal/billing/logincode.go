@@ -50,6 +50,16 @@ func (s *LoginCodeStore) Generate(email string) (string, error) {
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.entries) >= 1024 {
+		for address, entry := range s.entries {
+			if now.After(entry.expiresAt) && now.Sub(entry.sentAt) >= s.cooldown {
+				delete(s.entries, address)
+			}
+		}
+		if len(s.entries) >= 10000 {
+			return "", ErrCodeCooldown
+		}
+	}
 	if e, ok := s.entries[email]; ok && now.Sub(e.sentAt) < s.cooldown {
 		return "", ErrCodeCooldown
 	}
@@ -68,16 +78,19 @@ func (s *LoginCodeStore) Verify(email, code string) bool {
 	defer s.mu.Unlock()
 	e, ok := s.entries[email]
 	if !ok || now.After(e.expiresAt) {
-		delete(s.entries, email)
+		if ok {
+			e.code = ""
+		}
 		return false
 	}
 	e.attempts++
 	if e.attempts > 5 {
-		delete(s.entries, email)
+		e.code = ""
 		return false
 	}
 	if code != "" && subtle.ConstantTimeCompare([]byte(e.code), []byte(code)) == 1 {
-		delete(s.entries, email)
+		e.code = ""
+		e.attempts = 6
 		return true
 	}
 	return false
