@@ -151,10 +151,11 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 	authed.DELETE("/api-keys/:id", m.handleRevokeKey)
 	// Customer-safe labels for the user's own allowed accounts.
 	authed.GET("/account-labels", m.handleMyAccountLabels)
-	// Live upstream quota/balance for the user's allowed accounts.
-	authed.GET("/quota", m.handleAccountQuota)
-	authed.GET("/quota/:handle", m.handleRefreshAccountQuota)
-	authed.POST("/quota/:handle/reset", m.handleResetAccountCredit)
+	// Privileged accounts may inspect only their existing allowed account set.
+	quota := authed.Group("/quota", m.upstreamQuotaOnly())
+	quota.GET("", m.handleAccountQuota)
+	quota.GET("/:handle", m.handleRefreshAccountQuota)
+	quota.POST("/:handle/reset", m.handleResetAccountCredit)
 
 	authed.GET("/topup/methods", m.handleListTopupMethods)
 	authed.POST("/topup", m.handleCreateTopupOrder)

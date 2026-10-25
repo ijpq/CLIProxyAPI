@@ -465,6 +465,11 @@ func TestPortalPostgresAdminLimitsAndQuotaAuthorization(t *testing.T) {
 	admin, adminToken := f.register(t, "admin-limits@example.test")
 	u, token := f.register(t, "limits@example.test")
 	f.updateUser(t, admin.ID, "active", true)
+	policy, err := NewSitePolicy("portal.example.test", "example.com", admin.ID+","+u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.module.SetSitePolicy(policy)
 	const ownID, foreignID = "private-own@example.test.json", "private-foreign@example.test.json"
 	billing.SetAccountLister(func() []billing.Account {
 		return []billing.Account{{ID: ownID, Provider: "antigravity"}, {ID: foreignID, Provider: "antigravity"}}
