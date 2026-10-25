@@ -64,6 +64,11 @@ func TestPortalAdminCatalogAliasCreditAndUsageFilters(t *testing.T) {
 	if !strings.Contains(w.Body.String(), key.ID) {
 		t.Fatal("usage lost API key reference")
 	}
+	policy, err := NewSitePolicy("portal.example.test", "example.com", admin.ID+","+customer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.module.SetSitePolicy(policy)
 	for _, path := range []string{"/quota", "/quota/" + billing.AccountHandle(account)} {
 		w = f.request(t, "GET", path, token, nil)
 		requirePortalStatus(t, w, 200)

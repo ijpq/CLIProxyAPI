@@ -93,6 +93,26 @@ func (m *Module) privateAdminSite() gin.HandlerFunc {
 	}
 }
 
+// canViewUpstreamQuota is evaluated only after authentication has resolved the
+// current account. Site membership is independent of billing/admin flags.
+func (m *Module) canViewUpstreamQuota(c *gin.Context) bool {
+	if m.sitePolicy == nil {
+		// Without an explicit privileged allowlist, only administrators qualify.
+		return isAdminFromGin(c)
+	}
+	return m.siteMode(c) == sitePrivileged && m.siteAllowsUser(c, userIDFromGin(c))
+}
+
+func (m *Module) upstreamQuotaOnly() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !m.canViewUpstreamQuota(c) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "上游额度仅供特权账户查看"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func (m *Module) registrationAllowed(c *gin.Context) bool {
 	mode := m.siteMode(c)
 	return mode == siteLegacy || mode == siteCustomer

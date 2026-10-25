@@ -390,7 +390,9 @@ test('customer navigation cannot open administrator or upstream quota panels',as
  const {document,run}=await initialized();
  await run(`globalThis.dest='';loadDashboard=()=>{dest='dashboard'};loadQuota=()=>{dest='quota'};loadAdmin=()=>{dest='admin'};isAdmin=false;navigate('quota')`);
  assert.equal(run('dest'),'dashboard');run(`navigate('admin')`);assert.equal(run('dest'),'dashboard');
- run(`isAdmin=true;navigate('quota')`);assert.equal(run('dest'),'quota');
+ run(`isAdmin=true;navigate('quota')`);assert.equal(run('dest'),'dashboard');
+ run(`isAdmin=false;canViewQuota=true;navigate('quota')`);assert.equal(run('dest'),'quota');
+ run(`navigate('admin')`);assert.equal(run('dest'),'dashboard');
 });
 
 const submitEvent = `({preventDefault(){}})`;
@@ -450,7 +452,7 @@ test('navigation activates each section and invokes its data loader',async()=>{
  const pages=['dashboard','keys','topup','usage','quota','admin','assistant','settings'];
  const sections=pages.map(page=>document.getElementById('sec-'+page));selectors.set('[id^="sec-"]',sections);
  const links=pages.map(page=>{const node=document.getElementById('link-'+page);node.dataset.page=page;return node;});selectors.set('.sidebar nav a',links);
- run(`isAdmin=true;globalThis.loaded=[];loadDashboard=()=>loaded.push('dashboard');loadKeys=()=>loaded.push('keys');loadTopup=()=>loaded.push('topup');loadUsageFilterOptions=()=>{};loadUsageStats=()=>{};loadUsage=()=>loaded.push('usage');loadQuota=()=>loaded.push('quota');loadAdmin=()=>loaded.push('admin');loadAssistant=()=>loaded.push('assistant')`);
+ run(`isAdmin=true;canViewQuota=true;globalThis.loaded=[];loadDashboard=()=>loaded.push('dashboard');loadKeys=()=>loaded.push('keys');loadTopup=()=>loaded.push('topup');loadUsageFilterOptions=()=>{};loadUsageStats=()=>{};loadUsage=()=>loaded.push('usage');loadQuota=()=>loaded.push('quota');loadAdmin=()=>loaded.push('admin');loadAssistant=()=>loaded.push('assistant')`);
  for (const page of pages) {run(`navigate('${page}')`);assert.equal(document.getElementById('sec-'+page).classList.contains('hidden'),false);assert.equal(links[pages.indexOf(page)].classList.contains('active'),true);}
  location.hash='#keys';events.hashchange();assert.equal(run('loaded.at(-1)'),'keys');run(`navigate('')`);assert.equal(run('loaded.at(-1)'),'dashboard');
 });
@@ -460,6 +462,25 @@ test('account shell loads roles before opening the requested route',async()=>{
  await run(`globalThis.destination='';navigate=page=>destination=page;api=async()=>({user:{email:'user@example.test',is_admin:false}});enterApp()`);
  assert.equal(run('destination'),'keys');assert.equal(document.getElementById('nav-quota').classList.contains('hidden'),true);
  location.hash='';await run(`api=async()=>{throw {status:503}};enterApp()`);assert.equal(run('destination'),'dashboard');
+});
+
+test('quota visibility uses server membership and clears stale access on lookup failure',async()=>{
+ const {document,run,location}=await initialized();location.hash='#quota';
+ run(`loadDashboard=()=>{};loadQuota=()=>{};loadAdmin=()=>{}`);
+ await run(`api=async()=>({user:{email:'private@example.test',is_admin:false},can_view_upstream_quota:true});enterApp()`);
+ assert.equal(document.getElementById('nav-quota').classList.contains('hidden'),false);
+ assert.equal(document.getElementById('nav-admin').classList.contains('hidden'),true);
+ assert.equal(document.getElementById('sec-quota').classList.contains('hidden'),false);
+ await run(`api=async()=>{throw {status:503}};enterApp()`);
+ assert.equal(run('canViewQuota'),false);assert.equal(document.getElementById('nav-quota').classList.contains('hidden'),true);
+ for (const permission of [false,undefined,'true']) {
+  await run(`api=async()=>({user:{email:'admin@example.test',is_admin:true},can_view_upstream_quota:${JSON.stringify(permission)}});enterApp()`);
+  assert.equal(document.getElementById('nav-quota').classList.contains('hidden'),true);
+ }
+ const customer=app('/console/quota',{token:'test-session',fetch:async path=>({ok:true,status:200,json:async()=>path.endsWith('/me')?{user:{email:'customer@example.test',is_admin:true},can_view_upstream_quota:true}:{}})});
+ await flush();
+ assert.equal(customer.document.getElementById('nav-quota').classList.contains('hidden'),true);
+ assert.equal(customer.location.pathname,'/console');
 });
 
 test('quota cards escape provider data and communicate unavailable or bounded capacity',async()=>{

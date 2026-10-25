@@ -24,6 +24,7 @@ function updateConsoleLinks() {
 }
 let token = localStorage.getItem('portal_token');
 let isAdmin = false;
+let canViewQuota = false;
 let selectedMethod = null;
 let usageCursor = '';
 let adminUsers = [], allModels = [], allAccounts = [], editingUserId = null;
@@ -160,14 +161,19 @@ function doLogout() {
 
 // ---- App shell ----
 async function enterApp() {
+  isAdmin = false;
+  canViewQuota = false;
+  document.getElementById('nav-admin').classList.add('hidden');
+  document.getElementById('nav-quota').classList.add('hidden');
   document.getElementById('page-home').classList.add('hidden');
   document.getElementById('page-auth').classList.add('hidden');
   document.getElementById('page-app').classList.remove('hidden');
   try {
     const me = await api('/me');
     isAdmin = !!me.user.is_admin && !CLEAN_ROUTES;
+    canViewQuota = me.can_view_upstream_quota === true && !CLEAN_ROUTES;
     document.getElementById('nav-admin').classList.toggle('hidden', !isAdmin);
-    document.getElementById('nav-quota').classList.toggle('hidden', !isAdmin);
+    document.getElementById('nav-quota').classList.toggle('hidden', !canViewQuota);
     document.getElementById('side-email').textContent = me.user.email;
     document.getElementById('side-avatar').textContent = (me.user.email||'U').charAt(0).toUpperCase();
   } catch(e) {}
@@ -177,7 +183,7 @@ function navigate(page) {
   if (page !== 'keys') closeKeyPolicy(true);
   if (page !== 'keys') document.getElementById('new-key-msg').innerHTML = '';
   if (!page || !document.getElementById('sec-' + page)) page = 'dashboard';
-  if ((page === 'admin' || page === 'quota') && !isAdmin) page = 'dashboard';
+  if ((page === 'admin' && !isAdmin) || (page === 'quota' && !canViewQuota)) page = 'dashboard';
   updateRoute(page === 'dashboard' ? '/console' : '/console/' + page);
   document.querySelectorAll('[id^="sec-"]').forEach(s => s.classList.add('hidden'));
   document.getElementById('sec-' + page).classList.remove('hidden');

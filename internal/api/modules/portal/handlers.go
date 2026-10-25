@@ -145,7 +145,10 @@ func (m *Module) handleMe(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user": customerUserView(user)})
+	c.JSON(http.StatusOK, gin.H{
+		"user":                    customerUserView(user),
+		"can_view_upstream_quota": m.canViewUpstreamQuota(c),
+	})
 }
 
 func (m *Module) handleWallet(c *gin.Context) {
@@ -359,7 +362,7 @@ func (m *Module) handleMyAccountLabels(c *gin.Context) {
 }
 
 // quotaLookupTimeout bounds the live upstream quota probes so a single slow
-// provider cannot stall the 额度 page. This is a control-plane lookup, not the
+// provider cannot stall the quota page. This is a control-plane lookup, not the
 // proxy data path, so bounding it does not violate the upstream-timeout rule.
 const quotaLookupTimeout = 15 * time.Second
 
