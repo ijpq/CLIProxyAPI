@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
 )
 
 // ModelAccessGuard returns a gin middleware that rejects a request whose target
@@ -135,7 +135,7 @@ func requestedModel(c *gin.Context) string {
 			Closer: originalBody,
 		}
 		if errRead == nil && len(prefix) > 0 {
-			if m := strings.TrimSpace(gjson.GetBytes(prefix, "model").String()); m != "" {
+			if m := strings.TrimSpace(ojson.GetBytes(prefix, "model").String()); m != "" {
 				return m
 			}
 		}

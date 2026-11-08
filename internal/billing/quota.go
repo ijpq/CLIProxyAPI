@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/proxyutil"
-	"github.com/tidwall/gjson"
 )
 
 // AntigravityCredits mirrors the credits state the Antigravity executor already
@@ -248,7 +248,7 @@ func fetchCodexQuota(ctx context.Context, ua UpstreamAuth, out *AccountQuota) er
 	if status < 200 || status >= 300 {
 		return statusError(status)
 	}
-	root := gjson.ParseBytes(body)
+	root := ojson.ParseBytes(body)
 	if plan := codexPlanLabel(firstResult(root, "plan_type", "planType").String()); plan != "" {
 		out.PlanType = plan
 		out.addDetail("套餐", plan)
@@ -280,7 +280,7 @@ var claudeWindowLabels = []struct{ key, label string }{
 // parseClaudeUsage turns the Anthropic oauth/usage payload into normalized
 // windows. Each window carries "utilization" (0..100 used) and "resets_at".
 func parseClaudeUsage(body []byte) []QuotaWindow {
-	root := gjson.ParseBytes(body)
+	root := ojson.ParseBytes(body)
 	windows := make([]QuotaWindow, 0, len(claudeWindowLabels))
 	for _, w := range claudeWindowLabels {
 		node := root.Get(w.key)
@@ -304,7 +304,7 @@ func parseClaudeUsage(body []byte) []QuotaWindow {
 // from the usage payload, or "" when extra usage is disabled. Credit amounts are
 // reported in cents.
 func parseClaudeExtraUsage(body []byte) string {
-	extra := gjson.ParseBytes(body).Get("extra_usage")
+	extra := ojson.ParseBytes(body).Get("extra_usage")
 	if !extra.Exists() || !extra.Get("is_enabled").Bool() {
 		return ""
 	}
@@ -315,7 +315,7 @@ func parseClaudeExtraUsage(body []byte) string {
 
 // parseClaudePlan derives the subscription tier from the oauth/profile payload.
 func parseClaudePlan(body []byte) string {
-	root := gjson.ParseBytes(body)
+	root := ojson.ParseBytes(body)
 	if root.Get("account.has_claude_max").Bool() {
 		return "Max"
 	}
@@ -356,13 +356,13 @@ func codexPlanLabel(raw string) string {
 // parseCodexUsage turns a ChatGPT wham/usage payload into normalized windows.
 // Thin wrapper over parseCodexRateLimit for callers holding the raw body.
 func parseCodexUsage(body []byte) []QuotaWindow {
-	return parseCodexRateLimit(gjson.ParseBytes(body).Get("rate_limit"), "")
+	return parseCodexRateLimit(ojson.ParseBytes(body).Get("rate_limit"), "")
 }
 
 // parseCodexRateLimit normalizes one Codex rate_limit block. The primary window
 // is the ~5h limit; the secondary window is weekly (or monthly for team plans).
 // labelPrefix distinguishes buckets (e.g. code review) in the UI.
-func parseCodexRateLimit(rl gjson.Result, labelPrefix string) []QuotaWindow {
+func parseCodexRateLimit(rl ojson.Result, labelPrefix string) []QuotaWindow {
 	if !rl.Exists() {
 		return nil
 	}
@@ -376,7 +376,7 @@ func parseCodexRateLimit(rl gjson.Result, labelPrefix string) []QuotaWindow {
 	return windows
 }
 
-func parseCodexWindow(snake, camel gjson.Result, id, labelPrefix string) *QuotaWindow {
+func parseCodexWindow(snake, camel ojson.Result, id, labelPrefix string) *QuotaWindow {
 	node := snake
 	if !node.Exists() {
 		node = camel
@@ -413,7 +413,7 @@ func codexWindowLabel(id string, seconds float64) string {
 
 // codexResetTime resolves a Codex window reset instant from either an absolute
 // epoch (reset_at) or a relative offset (reset_after_seconds).
-func codexResetTime(node gjson.Result) *time.Time {
+func codexResetTime(node ojson.Result) *time.Time {
 	if v := firstResult(node, "reset_at", "resetAt"); v.Exists() && v.Float() > 0 {
 		t := time.Unix(int64(v.Float()), 0).UTC()
 		return &t
@@ -512,13 +512,13 @@ func setUsed(w *QuotaWindow, used float64) {
 	w.RemainingPercent = &remaining
 }
 
-func firstResult(node gjson.Result, keys ...string) gjson.Result {
+func firstResult(node ojson.Result, keys ...string) ojson.Result {
 	for _, k := range keys {
 		if v := node.Get(k); v.Exists() {
 			return v
 		}
 	}
-	return gjson.Result{}
+	return ojson.Result{}
 }
 
 func parseResetTime(raw string) *time.Time {

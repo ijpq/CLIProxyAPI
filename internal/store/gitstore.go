@@ -1556,9 +1556,6 @@ func isRepositoryCorruptionError(err error) bool {
 	if errors.Is(err, dotgit.ErrPackfileNotFound) || errors.Is(err, dotgit.ErrIdxNotFound) || errors.Is(err, plumbing.ErrObjectNotFound) {
 		return true
 	}
-	if errors.Is(err, fs.ErrNotExist) && strings.Contains(err.Error(), "packhandle:") {
-		return true
-	}
 	// go-git v6 can expose a missing pack as a wrapped filesystem error.
 	// Restrict this classification to pack objects, not arbitrary missing files.
 	var pathErr *fs.PathError

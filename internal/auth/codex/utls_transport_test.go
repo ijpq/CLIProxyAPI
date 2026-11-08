@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,30 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	"golang.org/x/net/proxy"
 )
+
+func TestOpenAIClientHonorsCustomInheritedTransport(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	wantErr := errors.New("synthetic transport intercepted OAuth")
+	called := false
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		called = true
+		if req.URL.String() != TokenURL {
+			t.Errorf("request URL = %s, want OAuth token endpoint", req.URL)
+		}
+		return nil, wantErr
+	})
+	_, errRequest := NewOpenAIHttpClient(&config.SDKConfig{}).Post(TokenURL, "application/json", strings.NewReader("{}"))
+	if !called || !errors.Is(errRequest, wantErr) {
+		t.Fatalf("custom transport called=%v, error=%v", called, errRequest)
+	}
+	for _, proxyURL := range []string{"direct", "none", "http://proxy.example.test:8080", "socks5://proxy.example.test:1080"} {
+		client := NewOpenAIHttpClient(&config.SDKConfig{ProxyURL: proxyURL})
+		if _, ok := client.Transport.(*utlsRoundTripper); !ok {
+			t.Fatalf("explicit proxy %q lost its transport: %T", proxyURL, client.Transport)
+		}
+	}
+}
 
 func TestUtlsRoundTripperDelegatesPlainHTTP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

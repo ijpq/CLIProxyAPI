@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 
 	tls "github.com/refraction-networking/utls"
@@ -232,6 +233,13 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 // fingerprinting on OpenAI auth endpoints by using utls with the Chrome
 // fingerprint. SDK configuration is honored for proxy settings.
 func NewOpenAIHttpClient(cfg *config.SDKConfig) *http.Client {
+	// Honor an explicitly installed transport when proxy behavior is inherited.
+	// Explicit account/global proxy settings must still take precedence.
+	if cfg == nil || strings.TrimSpace(cfg.ProxyURL) == "" {
+		if _, standard := http.DefaultTransport.(*http.Transport); !standard && http.DefaultTransport != nil {
+			return &http.Client{Transport: http.DefaultTransport}
+		}
+	}
 	return &http.Client{
 		Transport: newUtlsRoundTripper(cfg),
 	}

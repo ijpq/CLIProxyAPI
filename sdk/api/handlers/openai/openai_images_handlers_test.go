@@ -1590,9 +1590,10 @@ func TestImagesStreamKeepAliveDoesNotSplitCompletedEventMidLine_Issue7330(t *tes
 		}()
 
 		var canceled error
-		writeEvent := func(eventName string, dataJSON []byte) {
-			_, _ = c.Writer.Write([]byte("event: " + eventName + "\ndata: " + string(dataJSON) + "\n\n"))
+		writeEvent := func(eventName string, dataJSON []byte) error {
+			_, errWrite := c.Writer.Write([]byte("event: " + eventName + "\ndata: " + string(dataJSON) + "\n\n"))
 			flusher.Flush()
+			return errWrite
 		}
 		h.forwardImagesStream(context.Background(), c, flusher, func(err error) { canceled = err }, data, errs, firstChunk, "b64_json", "image_generation", writeEvent)
 		if canceled != nil {

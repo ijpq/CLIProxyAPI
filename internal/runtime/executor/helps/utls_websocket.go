@@ -3,13 +3,13 @@ package helps
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/MoeForge/moego/base64"
 	tls "github.com/refraction-networking/utls"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/proxyutil"
 	"golang.org/x/net/proxy"

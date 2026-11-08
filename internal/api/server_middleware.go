@@ -2,10 +2,10 @@ package api
 
 import (
 	"bufio"
-	"io"
-	"net"
 	"context"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"

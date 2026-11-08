@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/access/db_access"
@@ -25,7 +26,6 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 )
 
 // billingEnabled reports whether the operator opted into the paid-tier
@@ -257,8 +257,8 @@ func setupBilling(ctx context.Context, sharedPG *store.PostgresStore) ([]api.Ser
 				if failure != nil {
 					return "", errors.New("assistant provider failed")
 				}
-				reply := gjson.GetBytes(body, "choices.0.message.content")
-				if reply.Type != gjson.String || strings.TrimSpace(reply.String()) == "" {
+				reply := ojson.GetBytes(body, "choices.0.message.content")
+				if reply.Type != ojson.String || strings.TrimSpace(reply.String()) == "" {
 					return "", errors.New("assistant returned no text")
 				}
 				return reply.String(), nil

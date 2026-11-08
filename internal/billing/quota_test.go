@@ -3,7 +3,7 @@ package billing
 import (
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 func TestParseClaudeUsage(t *testing.T) {
@@ -114,7 +114,7 @@ func TestParseClaudeExtraUsageAndPlan(t *testing.T) {
 
 func TestParseCodexCodeReviewPrefix(t *testing.T) {
 	body := []byte(`{"code_review_rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000}}}`)
-	windows := parseCodexRateLimit(gjson.ParseBytes(body).Get("code_review_rate_limit"), "代码审查 · ")
+	windows := parseCodexRateLimit(ojson.ParseBytes(body).Get("code_review_rate_limit"), "代码审查 · ")
 	if len(windows) != 1 {
 		t.Fatalf("expected 1 code-review window, got %d", len(windows))
 	}
