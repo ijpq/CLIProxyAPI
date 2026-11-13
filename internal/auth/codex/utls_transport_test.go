@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,6 +36,34 @@ func TestOpenAIClientHonorsCustomInheritedTransport(t *testing.T) {
 		if _, ok := client.Transport.(*utlsRoundTripper); !ok {
 			t.Fatalf("explicit proxy %q lost its transport: %T", proxyURL, client.Transport)
 		}
+	}
+}
+
+func TestOpenAIClientHonorsReplacedStandardTransport(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	wantErr := errors.New("synthetic custom dial failure")
+	called := false
+	transport := initialDefaultTransport.Clone()
+	transport.Proxy = nil
+	transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		called = true
+		return nil, wantErr
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	http.DefaultTransport = transport
+	_, errRequest := NewOpenAIHttpClient(nil).Post(TokenURL, "application/json", strings.NewReader("{}"))
+	if !called || !errors.Is(errRequest, wantErr) {
+		t.Fatalf("custom dial called=%v, error=%v", called, errRequest)
+	}
+	for _, proxyURL := range []string{"direct", "none", "http://proxy.example.test:8080", "socks5://proxy.example.test:1080"} {
+		if _, ok := NewOpenAIHttpClient(&config.SDKConfig{ProxyURL: proxyURL}).Transport.(*utlsRoundTripper); !ok {
+			t.Fatalf("explicit proxy %q must retain the uTLS transport", proxyURL)
+		}
+	}
+	http.DefaultTransport = original
+	if _, ok := NewOpenAIHttpClient(nil).Transport.(*utlsRoundTripper); !ok {
+		t.Fatal("unmodified process default must retain the uTLS transport")
 	}
 }
 

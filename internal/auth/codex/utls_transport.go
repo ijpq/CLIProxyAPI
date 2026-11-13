@@ -20,6 +20,9 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// Keep the process default separate from a transport installed by an SDK embedder.
+var initialDefaultTransport, _ = http.DefaultTransport.(*http.Transport)
+
 // utlsConn is the subset of a negotiated HTTP connection the round tripper
 // needs. It is satisfied by *chromeh2.Conn and the HTTP/1.1 fallback.
 type utlsConn interface {
@@ -236,7 +239,8 @@ func NewOpenAIHttpClient(cfg *config.SDKConfig) *http.Client {
 	// Honor an explicitly installed transport when proxy behavior is inherited.
 	// Explicit account/global proxy settings must still take precedence.
 	if cfg == nil || strings.TrimSpace(cfg.ProxyURL) == "" {
-		if _, standard := http.DefaultTransport.(*http.Transport); !standard && http.DefaultTransport != nil {
+		transport, standard := http.DefaultTransport.(*http.Transport)
+		if http.DefaultTransport != nil && (!standard || transport != initialDefaultTransport) {
 			return &http.Client{Transport: http.DefaultTransport}
 		}
 	}

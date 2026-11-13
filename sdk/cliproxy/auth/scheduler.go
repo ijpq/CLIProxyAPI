@@ -627,7 +627,7 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 		}
 		pinned := shard.entries[pinnedAuthID]
 		if pinned == nil || pinned.state != scheduledStateReady || !predicate(pinned) {
-			pinnedPredicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, true)
+			pinnedPredicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, allowedAuthIDs, true)
 			return nil, "", shard.unavailableErrorLocked("mixed", model, pinnedPredicate)
 		}
 		bestPriority, hasCandidate = pinned.meta.priority, true
