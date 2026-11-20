@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"errors"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -59,8 +58,9 @@ func TestForwardStreamNormalizesErrorBeforeWriteAndCancel(t *testing.T) {
 		NormalizeTerminalError: func(errMsg *interfaces.ErrorMessage) *interfaces.ErrorMessage {
 			return &interfaces.ErrorMessage{StatusCode: errMsg.StatusCode, Error: errors.New("safe error")}
 		},
-		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) {
+		WriteTerminalError: func(errMsg *interfaces.ErrorMessage) error {
 			written = errMsg.Error.Error()
+			return nil
 		},
 	})
 
@@ -202,11 +202,12 @@ func TestForwardStreamResetsKeepAliveOnEachChunk(t *testing.T) {
 		canceled = err
 	}, data, errs, StreamForwardOptions{
 		KeepAliveInterval: &interval,
-		WriteChunk: func(chunk []byte) {
+		WriteChunk: func(chunk []byte) error {
 			if string(chunk) == "buffered-without-output" {
-				return
+				return nil
 			}
-			_, _ = c.Writer.Write(chunk)
+			_, errWrite := c.Writer.Write(chunk)
+			return errWrite
 		},
 	})
 

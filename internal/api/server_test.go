@@ -2320,9 +2320,25 @@ func TestModelsWithClientVersionReturnsCodexCatalog(t *testing.T) {
 	if got, _ := gpt55["max_tokens"].(float64); got != 64000 {
 		t.Fatalf("gpt-5.5 max_tokens = %v, want 64000", gpt55["max_tokens"])
 	}
-	serviceTiers, ok := gpt55["service_tiers"].([]any)
-	if !ok || len(serviceTiers) != 1 {
-		t.Fatalf("expected gpt-5.5 priority service tier, got %#v", gpt55["service_tiers"])
+	// Service tiers follow the bundled catalog; older models may lose priority support.
+	var templates struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal(registry.GetCodexClientModelsJSON(), &templates); err != nil {
+		t.Fatalf("parse Codex client model templates: %v", err)
+	}
+	var template map[string]any
+	for _, entry := range templates.Models {
+		if entry["slug"] == "gpt-5.5" {
+			template = entry
+			break
+		}
+	}
+	if template == nil {
+		t.Fatal("expected gpt-5.5 bundled template")
+	}
+	if _, ok := gpt55["service_tiers"].([]any); !ok || !reflect.DeepEqual(gpt55["service_tiers"], template["service_tiers"]) {
+		t.Fatalf("gpt-5.5 service tiers = %#v, want catalog tiers %#v", gpt55["service_tiers"], template["service_tiers"])
 	}
 	if custom == nil {
 		t.Fatal("expected custom model codex catalog entry")
