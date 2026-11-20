@@ -564,6 +564,11 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 						case <-wsDone:
 							return
 						case disconnectErr := <-disconnectCh:
+							if cliproxyexecutor.IsUpstreamWebsocketStreamError(disconnectErr) {
+								// The active stream owns this error and will flush it before
+								// closing. A second closer can race a preceding data write.
+								return
+							}
 							if provider == "codex" && codexDuplexStream.Load() {
 								// Only the selected credential's duplex stream owns closure:
 								// drain its acknowledgements and pending events in order.

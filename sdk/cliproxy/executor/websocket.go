@@ -137,3 +137,19 @@ func WebsocketInputLossError(ctx context.Context) error {
 	}
 	return &UpstreamWebsocketTurnError{NotSent: true}
 }
+
+// UpstreamWebsocketStreamError marks a disconnect notification whose cause was
+// already delivered to the active stream. Subscribers must let that stream
+// finish forwarding its terminal error rather than close the downstream early.
+type UpstreamWebsocketStreamError struct {
+	Cause error
+}
+
+func (e *UpstreamWebsocketStreamError) Error() string { return e.Cause.Error() }
+func (e *UpstreamWebsocketStreamError) Unwrap() error { return e.Cause }
+
+// IsUpstreamWebsocketStreamError identifies notifications owned by the stream.
+func IsUpstreamWebsocketStreamError(err error) bool {
+	var streamErr *UpstreamWebsocketStreamError
+	return errors.As(err, &streamErr)
+}

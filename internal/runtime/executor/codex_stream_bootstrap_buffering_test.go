@@ -1815,7 +1815,10 @@ func TestCodexWebsocketsExecutor_UnbufferedUpstreamErrorIsDeliveredBeforeDisconn
 			defer cancel()
 			canceled := make(chan struct{})
 			go func() {
-				<-disconnectCh
+				disconnectErr := <-disconnectCh
+				if !cliproxyexecutor.IsUpstreamWebsocketStreamError(disconnectErr) {
+					t.Error("in-stream error notification must leave downstream closure to the stream")
+				}
 				cancel()
 				close(canceled)
 			}()

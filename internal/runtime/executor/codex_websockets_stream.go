@@ -737,11 +737,11 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			if wsErr, ok := parseCodexWebsocketErrorWithCooling(payload, e.modelLevelCooling()); ok {
 				terminateReason = "upstream_error"
 				terminateErr = wsErr
-				// The disconnect notification makes the downstream handler close the client and
-				// cancel the request context, so it must follow delivery of the error to the
-				// conductor; otherwise the cancellation can drop the error and its cooldown.
-				// When no payload chunk has been emitted yet, the conductor may still fail over
-				// to another credential on the same downstream websocket, so do not notify disconnect.
+				// Deliver the error before notifying subscribers so cancellation cannot drop
+				// its cooldown. Mark the notification as stream-owned: the downstream
+				// forwarder must flush the error before closing the client connection.
+				// Before any payload is emitted, the conductor may still fail over on the
+				// same downstream websocket, so do not notify disconnect in that case.
 				if sess != nil {
 					e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, "upstream_error", wsErr)
 					sess.clearActive(conn, readCh)
@@ -753,7 +753,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 					reporter.PublishFailure(ctx, errClearReplay)
 					_ = send(cliproxyexecutor.StreamChunk{Err: errClearReplay})
 					if emittedPayload {
-						sess.notifyUpstreamDisconnect(wsErr)
+						sess.notifyUpstreamDisconnect(&cliproxyexecutor.UpstreamWebsocketStreamError{Cause: wsErr})
 					}
 					return
 				}
@@ -761,7 +761,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				reporter.PublishFailure(ctx, wsErr)
 				_ = send(cliproxyexecutor.StreamChunk{Err: wsErr})
 				if emittedPayload {
-					sess.notifyUpstreamDisconnect(wsErr)
+					sess.notifyUpstreamDisconnect(&cliproxyexecutor.UpstreamWebsocketStreamError{Cause: wsErr})
 				}
 				return
 			}
@@ -781,7 +781,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 					reporter.PublishFailure(ctx, errClearReplay)
 					_ = send(cliproxyexecutor.StreamChunk{Err: errClearReplay})
 					if emittedPayload {
-						sess.notifyUpstreamDisconnect(streamErr)
+						sess.notifyUpstreamDisconnect(&cliproxyexecutor.UpstreamWebsocketStreamError{Cause: streamErr})
 					}
 					return
 				}
@@ -789,7 +789,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				reporter.PublishFailure(ctx, streamErr)
 				_ = send(cliproxyexecutor.StreamChunk{Err: streamErr})
 				if emittedPayload {
-					sess.notifyUpstreamDisconnect(streamErr)
+					sess.notifyUpstreamDisconnect(&cliproxyexecutor.UpstreamWebsocketStreamError{Cause: streamErr})
 				}
 				return
 			}
